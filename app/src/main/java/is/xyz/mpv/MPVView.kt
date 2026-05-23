@@ -177,7 +177,7 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
         // This observes all properties needed by MPVView, MPVActivity or other classes
         data class Property(val name: String, val format: Int = MPV_FORMAT_NONE)
         val p = arrayOf(
-            Property("time-pos", MPV_FORMAT_INT64),
+            Property("time-pos", MPV_FORMAT_DOUBLE),
             Property("duration/full", MPV_FORMAT_DOUBLE),
             Property("pause", MPV_FORMAT_FLAG),
             Property("paused-for-cache", MPV_FORMAT_FLAG),
@@ -195,7 +195,11 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
             Property("shuffle", MPV_FORMAT_FLAG),
             Property("hwdec-current"),
             Property("mute", MPV_FORMAT_FLAG),
-            Property("current-tracks/audio/selected")
+            Property("seeking", MPV_FORMAT_FLAG),
+            Property("current-tracks/audio/selected"),
+            Property("cache-buffering-state", MPV_FORMAT_INT64),
+            Property("eof-reached", MPV_FORMAT_FLAG),
+            Property("vo-configured", MPV_FORMAT_FLAG)
         )
 
         for ((name, format) in p)

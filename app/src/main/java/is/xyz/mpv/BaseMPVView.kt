@@ -1,6 +1,7 @@
 package `is`.xyz.mpv
 
 import android.content.Context
+import android.net.Uri
 import android.util.AttributeSet
 import android.util.Log
 import android.view.SurfaceHolder
@@ -82,16 +83,25 @@ abstract class BaseMPVView(context: Context, attrs: AttributeSet) : SurfaceView(
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         Log.w(TAG, "attaching surface")
+        Log.d(SYNC_TAG, "[surface] surfaceCreated attachSurface forceWindow vo loadfile=${filePath != null}")
         MPVLib.attachSurface(holder.surface)
-        // This forces mpv to render subs/osd/whatever into our surface even if it would ordinarily not
         MPVLib.setOptionString("force-window", "yes")
+        MPVLib.setPropertyString("vo", voInUse)
 
-        if (filePath != null) {
-            MPVLib.command(arrayOf("loadfile", filePath as String))
+        filePath?.let { url ->
+            val act = context as? MPVActivity
+            val webViewUa = act?.getWebViewUserAgent()
+            MPVLib.applyNetworkHeadersForUrl(url, webViewUa)
+            val isBaiduPcs = isBaiduPcsUrl(url)
+            val uaSet = isBaiduPcs && !webViewUa.isNullOrBlank()
+            Log.d(SYNC_TAG, "[loadfile] ${syncUrlSummary(url)} mode=replace")
+            Log.d(SYNC_TAG, "[headers] isBaiduPcs=$isBaiduPcs uaSet=$uaSet refererCleared=true")
+            try {
+                MPVLib.command(arrayOf("loadfile", url, "replace"))
+            } catch (e: Exception) {
+                Log.e(TAG, "BaseMPVView loadfile error: ${e.message}", e)
+            }
             filePath = null
-        } else {
-            // We disable video output when the context disappears, enable it back
-            MPVLib.setPropertyString("vo", voInUse)
         }
     }
 
@@ -108,5 +118,22 @@ abstract class BaseMPVView(context: Context, attrs: AttributeSet) : SurfaceView(
 
     companion object {
         private const val TAG = "mpv"
+        private const val SYNC_TAG = "SyncTV"
+
+        private fun syncUrlSummary(url: String): String {
+            return try {
+                val uri = Uri.parse(url)
+                val host = uri.host ?: ""
+                val path = uri.encodedPath ?: ""
+                val queryKeys = uri.queryParameterNames.joinToString(",")
+                "host=$host path=$path queryKeys=$queryKeys"
+            } catch (e: Exception) {
+                "urlHash=${url.hashCode()}"
+            }
+        }
+
+        private fun isBaiduPcsUrl(url: String): Boolean {
+            return url.contains("baidupcs.com", ignoreCase = true) || url.contains("pcs.baidu.com", ignoreCase = true)
+        }
     }
 }

@@ -10,3 +10,11 @@ obj
 build/
 local.properties
 *~
+
+*.log
+logcat.txt
+logcat_utf8.txt
+
+# Precompiled binary shared libraries
+*.so
+app/src/main/jniLibs/

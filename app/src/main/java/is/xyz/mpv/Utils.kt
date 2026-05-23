@@ -356,7 +356,6 @@ internal object Utils {
         /** callback for properties of type <code>MPV_FORMAT_INT64</code> */
         fun update(property: String, value: Long): Boolean {
             when (property) {
-                "time-pos" -> position = value * 1000
                 "playlist-pos" -> playlistPos = value.toInt()
                 "playlist-count" -> playlistCount = value.toInt()
                 else -> return false
@@ -367,6 +366,7 @@ internal object Utils {
         /** callback for properties of type <code>MPV_FORMAT_DOUBLE</code> */
         fun update(property: String, value: Double): Boolean {
             when (property) {
+                "time-pos" -> position = (value * 1000.0).coerceAtLeast(0.0).toLong()
                 "duration/full" -> duration = ceil(value * 1000.0).coerceAtLeast(0.0).toLong()
                 else -> return false
             }

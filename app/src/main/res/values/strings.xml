@@ -65,6 +65,7 @@
     <string name="sub_seek_button">Seek by subtitle</string>
     <string name="file_picker_old">File picker\n(legacy)</string>
     <string name="action_settings">Settings</string>
+    <string name="action_synctv">SyncTV</string>
     <string name="action_playlist">Playlist</string>
     <string name="action_open_url">Open URL</string>
     <string name="action_open_doc">Open document</string>

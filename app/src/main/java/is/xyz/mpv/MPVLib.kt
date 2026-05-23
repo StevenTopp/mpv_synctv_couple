@@ -126,6 +126,17 @@ object MPVLib {
         }
     }
 
+    @JvmStatic
+    fun applyNetworkHeadersForUrl(url: String, webViewUserAgent: String?) {
+        if (url.contains("baidupcs.com", ignoreCase = true) || url.contains("pcs.baidu.com", ignoreCase = true)) {
+            setPropertyString("user-agent", webViewUserAgent ?: "")
+            setPropertyString("http-header-fields", "")
+        } else {
+            setPropertyString("user-agent", "")
+            setPropertyString("http-header-fields", "")
+        }
+    }
+
     interface EventObserver {
         fun eventProperty(property: String)
         fun eventProperty(property: String, value: Long)

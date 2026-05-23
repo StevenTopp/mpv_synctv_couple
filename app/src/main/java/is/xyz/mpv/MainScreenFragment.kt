@@ -103,6 +103,11 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
             saveChoice("") // will reset
             startActivity(Intent(context, PreferenceActivity::class.java))
         }
+        binding.syncBtn.setOnClickListener {
+            val i = Intent(context, MPVActivity::class.java)
+            i.putExtra("filepath", "synctv://")
+            playerLauncher.launch(i)
+        }
 
         if (BuildConfig.DEBUG) {
             binding.settingsBtn.setOnLongClickListener { showDebugMenu(); true }

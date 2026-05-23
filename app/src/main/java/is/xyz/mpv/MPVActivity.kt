@@ -1,6 +1,9 @@
 package `is`.xyz.mpv
 
 import `is`.xyz.mpv.databinding.PlayerBinding
+import android.webkit.*
+import org.json.JSONObject
+import org.json.JSONArray
 import `is`.xyz.mpv.MPVLib.MpvEvent
 import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
@@ -74,7 +77,41 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     private var didResumeBackgroundPlayback = false
     private var userIsOperatingSeekbar = false
 
+    
+    private var onlineSubtitleUrl: String? = null
+
+    // Remote synchronization state flags to prevent broadcast feedback loops
+    private var isRemotePlaySync = false
+    private var isRemotePauseSync = false
+    private var isRemoteSeekSync = false
+    private var isRemoteSpeedSync = false
+    private var isProgrammaticSeek = false
+    private var pendingProgrammaticSeekFinish = false
+
     private var toast: Toast? = null
+
+    // MPV State for SyncTV Ready Probe
+    private var mpvSeeking = false
+    private var mpvPausedForCache = false
+    private var mpvCacheBufferingState = 100
+    private var mpvHasVideoOut = false
+    private var mpvEofReached = false
+
+    // Tracking variables for SyncTV throttling and snapshots
+    private var activeSeekId: String? = null
+    private var lastTimePosLogTime: Long = 0L
+    private var lastCacheLogTime: Long = 0L
+    private var lastDumpProbeLogTime: Long = 0L
+    private var lastMediaSessionUpdateTime: Long = 0L
+    private var lastTimePosUiUpdateTime: Long = 0L
+
+    // Android MPV Buffer Probe for Remote Seek Sync
+    private var currentLoadedUrl: String? = null
+    private var isBufferProbeActive = false
+    private var bufferProbeGeneration = 0
+    private var bufferProbeTarget: Double? = null
+    private var originalMuteState = false
+
 
     private var audioManager: AudioManager? = null
     private var audioFocusRequest: AudioFocusRequestCompat? = null
@@ -93,8 +130,10 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
             if (!fromUser)
                 return
-            player.timePos = progress.toDouble() / SEEK_BAR_PRECISION
-            // Note: don't call updatePlaybackPos() here either
+            val seconds = progress.toDouble() / SEEK_BAR_PRECISION
+            player.timePos = seconds
+            // Update the native time text immediately as the user drags/clicks to show progress in real time
+            binding.playbackPositionTxt.text = Utils.prettyTime(seconds.toInt())
         }
 
         override fun onStartTrackingTouch(seekBar: SeekBar) {
@@ -213,6 +252,73 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             cycleDecoderBtn.setOnLongClickListener { pickDecoder(); true }
 
             playbackSeekbar.setOnSeekBarChangeListener(seekBarChangeListener)
+
+            topSyncBtn.setOnClickListener {
+                if (syncPanel.visibility == View.VISIBLE) {
+                    syncPanel.visibility = View.GONE
+                } else {
+                    syncPanel.visibility = View.VISIBLE
+                    showControls()
+                }
+                updateControlsMargins()
+            }
+
+            // WebView setup
+            val prefs = getDefaultSharedPreferences(applicationContext)
+            val defaultServer = prefs.getString("sync_server", "http://127.0.0.1:30008") ?: "http://127.0.0.1:30008"
+            syncServerUrlInput.setText(defaultServer)
+
+            syncWebView.settings.javaScriptEnabled = true
+            syncWebView.settings.domStorageEnabled = true
+            syncWebView.settings.databaseEnabled = true
+            syncWebView.settings.mediaPlaybackRequiresUserGesture = false
+
+            syncWebView.webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    super.onPageFinished(view, url)
+                    view?.evaluateJavascript(getMonkeyPatchJs(), null)
+                }
+            }
+            syncWebView.webChromeClient = object : WebChromeClient() {
+                override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                    consoleMessage?.let {
+                        Log.d("WebConsole", "[${it.messageLevel()}] ${it.message()} -- From line ${it.lineNumber()} of ${it.sourceId()}")
+                    }
+                    return true
+                }
+            }
+            syncWebView.addJavascriptInterface(AndroidBridge(), "AndroidBridge")
+            syncWebView.loadUrl(defaultServer)
+
+            syncServerGoBtn.setOnClickListener {
+                val url = syncServerUrlInput.text.toString().trim()
+                if (url.isNotEmpty()) {
+                    var targetUrl = url
+                    if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+                        targetUrl = "http://$targetUrl"
+                    }
+                    prefs.edit().putString("sync_server", targetUrl).apply()
+                    syncWebView.loadUrl(targetUrl)
+                }
+            }
+
+            syncServerUrlInput.setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_GO ||
+                    actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                    val url = syncServerUrlInput.text.toString().trim()
+                    if (url.isNotEmpty()) {
+                        var targetUrl = url
+                        if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+                            targetUrl = "http://$targetUrl"
+                        }
+                        prefs.edit().putString("sync_server", targetUrl).apply()
+                        syncWebView.loadUrl(targetUrl)
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
         }
 
         player.setOnTouchListener { _, e ->
@@ -301,7 +407,13 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
         player.addObserver(this)
         player.initialize(filesDir.path, cacheDir.path)
-        player.playFile(filepath)
+        if (filepath == "synctv://") {
+            binding.syncPanel.visibility = View.VISIBLE
+            showControls()
+            updateControlsMargins()
+        } else {
+            player.playFile(filepath)
+        }
 
         mediaSession = initMediaSession()
         updateMediaSession()
@@ -360,6 +472,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
         player.removeObserver(this)
         player.destroy()
+        binding.syncWebView.destroy()
         super.onDestroy()
     }
 
@@ -373,6 +486,11 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         if (filepath == null) {
             return
         }
+
+        val host = try { Uri.parse(filepath).host ?: "" } catch (e: Exception) { "" }
+        Log.d(SYNC_TAG, "[loadfile] urlHost=$host mode=replace")
+        val isBaiduPcs = filepath.contains("baidupcs.com") || filepath.contains("pcs.baidu.com")
+        Log.d(SYNC_TAG, "[headers] isBaiduPcs=$isBaiduPcs uaSet=false refererCleared=true")
 
         if (!activityIsForeground && didResumeBackgroundPlayback) {
             if (this.newIntentReplace) {
@@ -970,9 +1088,24 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         }
     }
 
+    private fun updateControlsMargins() {
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val syncPanelVisible = binding.syncPanel.visibility == View.VISIBLE
+        val extraRightMargin = if (syncPanelVisible) Utils.convertDp(this, 340f) else 0
+
+        binding.controls.updateLayoutParams<MarginLayoutParams> {
+            bottomMargin = if (!controlsAtBottom) Utils.convertDp(this@MPVActivity, 60f) else 0
+            leftMargin = if (!controlsAtBottom) Utils.convertDp(this@MPVActivity, if (isLandscape) 60f else 24f) else 0
+            rightMargin = leftMargin + extraRightMargin
+        }
+
+        binding.topControls.updateLayoutParams<MarginLayoutParams> {
+            rightMargin = extraRightMargin
+        }
+    }
+
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        val isLandscape = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val wm = windowManager.currentWindowMetrics
@@ -983,20 +1116,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             gestures.setMetrics(dm.widthPixels.toFloat(), dm.heightPixels.toFloat())
         }
 
-        // Adjust control margins
-        binding.controls.updateLayoutParams<MarginLayoutParams> {
-            bottomMargin = if (!controlsAtBottom) {
-                Utils.convertDp(this@MPVActivity, 60f)
-            } else {
-                0
-            }
-            leftMargin = if (!controlsAtBottom) {
-                Utils.convertDp(this@MPVActivity, if (isLandscape) 60f else 24f)
-            } else {
-                0
-            }
-            rightMargin = leftMargin
-        }
+        // Adjust control margins dynamically
+        updateControlsMargins()
     }
 
     private fun onPiPModeChangedImpl(state: Boolean) {
@@ -1870,17 +1991,80 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     private fun eventPropertyUi(property: String, value: Boolean) {
         if (!activityIsForeground) return
         when (property) {
-            "pause" -> updatePlaybackStatus(value)
-            "mute" -> { // indirectly from updateAudioPresence()
-                updateAudioUI()
+            "pause" -> {
+                Log.d(SYNC_TAG, "[mpv-state] property=pause value=$value")
+                updatePlaybackStatus(value)
+                val isRemote = if (value) {
+                    val r = isRemotePauseSync
+                    isRemotePauseSync = false
+                    r
+                } else {
+                    val r = isRemotePlaySync
+                    isRemotePlaySync = false
+                    r
+                }
+                syncPlayerStateToWebView("pause", value, isRemote)
+                dumpSeekProbeState("pause")
             }
+            "seeking" -> {
+                Log.d(SYNC_TAG, "[mpv-state] property=seeking value=$value")
+                mpvSeeking = value
+                val wasProgrammatic = isProgrammaticSeek
+                if (!value) {
+                    // Query exact time-pos synchronously from MPV to prevent stale/truncated currentTime inside the WebView seeked event
+                    val exactTime = player.timePos ?: (psc.position.toDouble() / 1000.0)
+                    Log.d(SYNC_TAG, "[mpv-state] seeking finished, sending exact time-pos = $exactTime")
+                    syncPlayerStateToWebView("time-pos", exactTime)
+                    if (isBufferProbeActive) {
+                        pendingProgrammaticSeekFinish = wasProgrammatic
+                        Log.d(SYNC_TAG, "[programmatic-seek] defer-finish reason=buffer-probe-active")
+                        dumpSeekProbeState("seeking")
+                        return
+                    }
+                }
+                syncPlayerStateToWebView("seeking", value, wasProgrammatic)
+                if (!value && !isBufferProbeActive) {
+                    isProgrammaticSeek = false
+                    pendingProgrammaticSeekFinish = false
+                    Log.d(SYNC_TAG, "[programmatic-seek] clear")
+                }
+                dumpSeekProbeState("seeking")
+            }
+            "paused-for-cache" -> {
+                Log.d(SYNC_TAG, "[mpv-state] property=paused-for-cache value=$value")
+                mpvPausedForCache = value
+                syncPlayerStateToWebView("paused-for-cache", value)
+                dumpSeekProbeState("paused-for-cache")
+            }
+            "eof-reached" -> {
+                Log.d(SYNC_TAG, "[mpv-state] property=eof-reached value=$value")
+                mpvEofReached = value
+                syncPlayerStateToWebView("eof-reached", value)
+                dumpSeekProbeState("eof-reached")
+            }
+            "vo-configured" -> {
+                Log.d(SYNC_TAG, "[mpv-state] property=vo-configured value=$value")
+                mpvHasVideoOut = value
+                syncPlayerStateToWebView("has-video-out", value)
+                dumpSeekProbeState("vo-configured")
+            }
+            "mute" -> updateAudioUI()
         }
     }
 
     private fun eventPropertyUi(property: String, value: Long) {
         if (!activityIsForeground) return
         when (property) {
-            "time-pos" -> updatePlaybackPos(psc.positionSec)
+            "cache-buffering-state" -> {
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastCacheLogTime >= 250) {
+                    lastCacheLogTime = now
+                    Log.d(SYNC_TAG, "[mpv-state] property=cache-buffering-state value=$value")
+                }
+                mpvCacheBufferingState = value.toInt()
+                syncPlayerStateToWebView("cache-buffering-state", value)
+                dumpSeekProbeState("cache-buffering-state")
+            }
             "playlist-pos", "playlist-count" -> updatePlaylistButtons()
         }
     }
@@ -1888,7 +2072,30 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     private fun eventPropertyUi(property: String, value: Double) {
         if (!activityIsForeground) return
         when (property) {
-            "duration/full" -> updatePlaybackDuration(psc.durationSec)
+            "time-pos" -> {
+                val now = SystemClock.elapsedRealtime()
+                val isRemote = isRemoteSeekSync
+                val inSeekSync = activeSeekId != null
+
+                if (isRemote || inSeekSync || now - lastTimePosUiUpdateTime >= 250L) {
+                    lastTimePosUiUpdateTime = now
+                    if (now - lastTimePosLogTime >= 250L) {
+                        lastTimePosLogTime = now
+                        Log.d(SYNC_TAG, "[mpv-state] property=time-pos value=$value")
+                    }
+                    updatePlaybackPos(psc.positionSec)
+                    isRemoteSeekSync = false
+                    val exactTime = value
+                    syncPlayerStateToWebView("time-pos", exactTime, isRemote)
+                    dumpSeekProbeState("time-pos")
+                }
+            }
+            "duration/full" -> {
+                Log.d(SYNC_TAG, "[mpv-state] property=duration/full value=${psc.durationSec}")
+                updatePlaybackDuration(psc.durationSec)
+                syncPlayerStateToWebView("duration/full", psc.durationSec)
+                dumpSeekProbeState("duration/full")
+            }
             "video-params/aspect", "video-params/rotate" -> {
                 updateOrientation()
                 updatePiPParams()
@@ -1899,7 +2106,14 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     private fun eventPropertyUi(property: String, value: String, metaUpdated: Boolean) {
         if (!activityIsForeground) return
         when (property) {
-            "speed" -> updateSpeedButton()
+            "speed" -> {
+                Log.d(SYNC_TAG, "[mpv-state] property=speed value=$value")
+                updateSpeedButton()
+                val isRemote = isRemoteSpeedSync
+                isRemoteSpeedSync = false
+                syncPlayerStateToWebView("speed", value, isRemote)
+                dumpSeekProbeState("speed")
+            }
         }
         if (metaUpdated)
             updateMetadataDisplay()
@@ -1952,16 +2166,36 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     }
 
     override fun eventProperty(property: String, value: Long) {
-        if (psc.update(property, value))
-            updateMediaSession()
+        val updated = psc.update(property, value)
+        if (updated) {
+            if (property == "time-pos") {
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastMediaSessionUpdateTime >= 500L) {
+                    lastMediaSessionUpdateTime = now
+                    updateMediaSession()
+                }
+            } else {
+                updateMediaSession()
+            }
+        }
 
         if (!activityIsForeground) return
         eventUiHandler.post { eventPropertyUi(property, value) }
     }
 
     override fun eventProperty(property: String, value: Double) {
-        if (psc.update(property, value))
-            updateMediaSession()
+        val updated = psc.update(property, value)
+        if (updated) {
+            if (property == "time-pos") {
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastMediaSessionUpdateTime >= 500L) {
+                    lastMediaSessionUpdateTime = now
+                    updateMediaSession()
+                }
+            } else {
+                updateMediaSession()
+            }
+        }
 
         if (!activityIsForeground) return
         eventUiHandler.post { eventPropertyUi(property, value) }
@@ -2109,8 +2343,445 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         }
     }
 
+
+    private fun syncUrlSummary(url: String): String {
+        return try {
+            val uri = Uri.parse(url)
+            val host = uri.host ?: ""
+            val path = uri.encodedPath ?: ""
+            val queryKeys = uri.queryParameterNames.joinToString(",")
+            "host=$host path=$path queryKeys=$queryKeys"
+        } catch (e: Exception) {
+            "urlHash=${url.hashCode()}"
+        }
+    }
+
+    private fun dumpSeekProbeState(reason: String) {
+        if (activeSeekId == null) return
+        val now = SystemClock.elapsedRealtime()
+        if (reason == "time-pos" || reason == "cache-buffering-state") {
+            if (now - lastDumpProbeLogTime < 250) return
+        }
+        lastDumpProbeLogTime = now
+        Log.d(SYNC_TAG, "[seek-probe] seekId=${activeSeekId ?: "none"} reason=$reason seeking=$mpvSeeking pausedForCache=$mpvPausedForCache voConfigured=$mpvHasVideoOut cache=$mpvCacheBufferingState timePos=${psc.positionSec}")
+    }
+
+    private fun syncPlayerStateToWebView(property: String, value: Any, isRemoteSyncOrProgrammatic: Boolean = false) {
+        if (isBufferProbeActive) {
+            if (property == "pause" || property == "time-pos" || property == "seeking" || property == "paused-for-cache") {
+                Log.d("MPVActivity", "[buffer-probe-suppressed] property=$property value=$value")
+                return
+            }
+        }
+        // Log.d(SYNC_TAG, "[android->web] property=$property value=$value isRemoteSync=$isRemoteSyncOrProgrammatic")
+        val script = when (property) {
+            "pause" -> "if (typeof player !== 'undefined' && typeof player._setPausedNative === 'function') { player._setPausedNative($value, $isRemoteSyncOrProgrammatic); }"
+            "time-pos" -> "if (typeof player !== 'undefined' && typeof player._setCurrentTimeNative === 'function') { player._setCurrentTimeNative($value, $isRemoteSyncOrProgrammatic); }"
+            "duration/full" -> "if (typeof player !== 'undefined' && typeof player._setDurationNative === 'function') { player._setDurationNative($value); }"
+            "speed" -> "if (typeof player !== 'undefined' && typeof player._setSpeedNative === 'function') { player._setSpeedNative($value, $isRemoteSyncOrProgrammatic); }"
+            "seeking" -> "if (typeof player !== 'undefined' && typeof player._updateMpvState === 'function') { player._updateMpvState('$property', $value, $isRemoteSyncOrProgrammatic); }"
+            "paused-for-cache", "cache-buffering-state", "eof-reached", "has-video-out", "buffer-probing" -> "if (typeof player !== 'undefined' && typeof player._updateMpvState === 'function') { player._updateMpvState('$property', $value); }"
+            else -> null
+        }
+        script?.let {
+            runOnUiThread {
+                binding.syncWebView.evaluateJavascript(it, null)
+            }
+        }
+    }
+
+    private fun loadVideoWithHeaders(url: String, mode: String = "replace", title: String? = null) {
+        currentLoadedUrl = url
+        var userAgent = ""
+        var referer = ""
+        Log.d(SYNC_TAG, "[loadfile] ${syncUrlSummary(url)} mode=$mode")
+        
+        var isBaiduPcs = false
+        if (url.contains("baidupcs.com") || url.contains("pcs.baidu.com")) {
+            userAgent = "pan.baidu.com"
+            referer = "" // DO NOT send Referer to match working curl behavior
+            isBaiduPcs = true
+        }
+        val uaSet = userAgent.isNotEmpty()
+        val refererCleared = referer.isEmpty()
+        Log.d(SYNC_TAG, "[headers] isBaiduPcs=$isBaiduPcs uaSet=$uaSet refererCleared=$refererCleared")
+        
+        try {
+            val headers = mutableListOf<String>()
+            if (userAgent.isNotEmpty()) headers.add("User-Agent: $userAgent")
+            if (referer.isNotEmpty()) headers.add("Referer: $referer")
+
+            MPVLib.setPropertyString("user-agent", userAgent)
+            MPVLib.setPropertyString("http-header-fields", headers.joinToString(","))
+            MPVLib.setPropertyString("force-media-title", title ?: "")
+
+            MPVLib.command(arrayOf("loadfile", url, mode))
+        } catch (e: Exception) {
+            Log.e(TAG, "loadVideoWithHeaders: failed to execute loadfile command", e)
+        }
+    }
+
+    inner class AndroidBridge {
+        @JavascriptInterface
+        fun onVideoSrcChanged(url: String, title: String) {
+            Log.d(SYNC_TAG, "[web->android] onVideoSrcChanged url=${syncUrlSummary(url)} title=$title")
+            runOnUiThread {
+                val serverUrl = binding.syncServerUrlInput.text.toString().trim()
+                val absoluteUrl = if (url.startsWith("/")) {
+                    val base = if (serverUrl.endsWith("/")) serverUrl.substring(0, serverUrl.length - 1) else serverUrl
+                    base + url
+                } else {
+                    url
+                }
+                onlineSubtitleUrl = null
+                loadVideoWithHeaders(absoluteUrl, "replace", title)
+            }
+        }
+
+        @JavascriptInterface
+        fun onVideoPlay(isRemoteSync: Boolean) {
+            Log.d(SYNC_TAG, "[web->android] onVideoPlay isRemoteSync=$isRemoteSync")
+            runOnUiThread {
+                if (isRemoteSync) isRemotePlaySync = true
+                player.paused = false
+            }
+        }
+
+        @JavascriptInterface
+        fun onVideoPause(isRemoteSync: Boolean) {
+            Log.d(SYNC_TAG, "[web->android] onVideoPause isRemoteSync=$isRemoteSync")
+            runOnUiThread {
+                if (isRemoteSync) isRemotePauseSync = true
+                player.paused = true
+            }
+        }
+
+        @JavascriptInterface
+        fun onVideoSeek(seconds: Double, isRemoteSync: Boolean) {
+            Log.d(SYNC_TAG, "[web->android] onVideoSeek seconds=$seconds isRemoteSync=$isRemoteSync")
+            runOnUiThread {
+                val oldGen = bufferProbeGeneration
+                bufferProbeGeneration++
+                if (isBufferProbeActive) {
+                    isBufferProbeActive = false
+                    Log.d("MPVActivity", "[buffer-probe-cancelled] oldGen=$oldGen newGen=$bufferProbeGeneration due to new seek target=$seconds")
+                    syncPlayerStateToWebView("buffer-probing", false)
+                }
+
+                // Block the ready check immediately in WebView
+                mpvSeeking = true
+                if (isRemoteSync) {
+                    isProgrammaticSeek = true
+                    syncPlayerStateToWebView("seeking", true, true)
+                } else {
+                    syncPlayerStateToWebView("seeking", true, false)
+                }
+
+                if (isRemoteSync) isRemoteSeekSync = true
+                player.timePos = seconds
+
+                val url = currentLoadedUrl
+                val isRemote = url != null && (url.startsWith("http://") || url.startsWith("https://"))
+                if (isRemoteSync && isRemote && activeSeekId != null) {
+                    Log.d(SYNC_TAG, "[programmatic-seek] mark=true reason=remote-seek activeSeekId=$activeSeekId")
+                    runBufferProbe(seconds, bufferProbeGeneration)
+                } else if (isRemoteSync && isRemote) {
+                    Log.d(SYNC_TAG, "[buffer-probe] skipped reason=no-active-seek activeSeekId=$activeSeekId")
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun onVideoSpeedChange(speed: Double, isRemoteSync: Boolean) {
+            Log.d(SYNC_TAG, "[web->android] onVideoSpeedChange speed=$speed isRemoteSync=$isRemoteSync")
+            runOnUiThread {
+                if (isRemoteSync) isRemoteSpeedSync = true
+                player.playbackSpeed = speed
+            }
+        }
+        
+        @JavascriptInterface
+        fun requestMpvState() {
+            runOnUiThread {
+                syncPlayerStateToWebView("seeking", mpvSeeking, isProgrammaticSeek)
+                syncPlayerStateToWebView("paused-for-cache", mpvPausedForCache)
+                syncPlayerStateToWebView("cache-buffering-state", mpvCacheBufferingState)
+                syncPlayerStateToWebView("eof-reached", mpvEofReached)
+                syncPlayerStateToWebView("has-video-out", mpvHasVideoOut)
+                val exactTime = player.timePos ?: (psc.position.toDouble() / 1000.0)
+                syncPlayerStateToWebView("time-pos", exactTime)
+            }
+        }
+
+        @JavascriptInterface
+        fun setActiveSeekId(seekId: String) {
+            runOnUiThread {
+                activeSeekId = if (seekId.isEmpty()) null else seekId
+                Log.d(SYNC_TAG, "[web->android] setActiveSeekId id=$seekId")
+                dumpSeekProbeState("set-active-seek-id")
+                
+                // Control native Syncing overlay visibility
+                if (activeSeekId != null) {
+                    binding.nativeSyncOverlay.visibility = View.VISIBLE
+                } else {
+                    binding.nativeSyncOverlay.visibility = View.GONE
+                }
+            }
+        }
+        
+        @JavascriptInterface
+        fun onDanmakuReceived(text: String, color: String) {
+            // Placeholder
+        }
+    }
+
+    private fun runBufferProbe(targetSeconds: Double, gen: Int) {
+        Log.d("MPVActivity", "[buffer-probe-start] seekId=remoteSeek target=$targetSeconds gen=$gen")
+        isBufferProbeActive = true
+        bufferProbeTarget = targetSeconds
+        originalMuteState = MPVLib.getPropertyBoolean("mute") == true
+
+        syncPlayerStateToWebView("buffer-probing", true)
+        MPVLib.setPropertyBoolean("mute", true)
+
+        eventUiHandler.postDelayed({
+            runOnUiThread {
+                if (bufferProbeGeneration != gen) {
+                    Log.d("MPVActivity", "[buffer-probe-cancelled] Play step skipped for gen=$gen (current=$bufferProbeGeneration)")
+                    return@runOnUiThread
+                }
+                Log.d("MPVActivity", "[buffer-probe-play] gen=$gen unpausing MPV to force buffering")
+                player.paused = false
+            }
+        }, 150)
+
+        eventUiHandler.postDelayed({
+            runOnUiThread {
+                if (bufferProbeGeneration != gen) {
+                    Log.d("MPVActivity", "[buffer-probe-cancelled] Pause step skipped for gen=$gen (current=$bufferProbeGeneration)")
+                    return@runOnUiThread
+                }
+                Log.d("MPVActivity", "[buffer-probe-pause-seekback] gen=$gen pausing MPV and seeking back")
+                player.paused = true
+                isProgrammaticSeek = true
+                player.timePos = targetSeconds
+            }
+        }, 450)
+
+        eventUiHandler.postDelayed({
+            runOnUiThread {
+                if (bufferProbeGeneration != gen) {
+                    Log.d("MPVActivity", "[buffer-probe-cancelled] End step skipped for gen=$gen (current=$bufferProbeGeneration)")
+                    return@runOnUiThread
+                }
+                Log.d("MPVActivity", "[buffer-probe-end] gen=$gen restoring mute=$originalMuteState and finishing probe")
+                MPVLib.setPropertyBoolean("mute", originalMuteState)
+                isBufferProbeActive = false
+                syncPlayerStateToWebView("buffer-probing", false)
+                
+                val programmatic = isProgrammaticSeek || pendingProgrammaticSeekFinish
+                Log.d(SYNC_TAG, "[programmatic-seek] flush-finish seeking=$mpvSeeking programmatic=$programmatic")
+                syncPlayerStateToWebView("seeking", mpvSeeking, programmatic)
+                syncPlayerStateToWebView("paused-for-cache", mpvPausedForCache)
+                syncPlayerStateToWebView("cache-buffering-state", mpvCacheBufferingState)
+                syncPlayerStateToWebView("eof-reached", mpvEofReached)
+                syncPlayerStateToWebView("has-video-out", mpvHasVideoOut)
+                if (!mpvSeeking) {
+                    isProgrammaticSeek = false
+                    pendingProgrammaticSeekFinish = false
+                }
+            }
+        }, 650)
+    }
+
+    fun getWebViewUserAgent(): String {
+        return binding.syncWebView.settings.userAgentString ?: ""
+    }
+
+    private fun getMonkeyPatchJs(): String {
+        return """
+            (function() {
+                // Periodic style application depending on pathname
+                function applyStyles() {
+                    if (window.location.pathname.indexOf('/room/') !== -1) {
+                        if (!document.getElementById('synctv-custom-style')) {
+                            var style = document.createElement('style');
+                            style.id = 'synctv-custom-style';
+                            style.type = 'text/css';
+                            style.innerHTML = ' \
+                                .topbar { display: none !important; } \
+                                .theater { display: none !important; } \
+                                .layout { grid-template-columns: 1fr !important; gap: 0 !important; } \
+                                .side { grid-template-columns: 1fr !important; gap: 10px !important; } \
+                                .panel { padding: 12px !important; margin-bottom: 10px !important; } \
+                                ::-webkit-scrollbar { display: none !important; } \
+                            ';
+                            document.head.appendChild(style);
+                        }
+                    } else {
+                        var style = document.getElementById('synctv-custom-style');
+                        if (style) style.remove();
+                    }
+                }
+                applyStyles();
+                setInterval(applyStyles, 500);
+
+                // Periodic player mocking check
+                setInterval(function() {
+                    var p = document.querySelector('video');
+                    if (!p || p._isMocked) return;
+                    p._isMocked = true;
+
+                    p._mockCurrentTime = 0;
+                    p._mockDuration = 0;
+                    p._mockPaused = true;
+                    p._syncingFromNative = false;
+                    p._mockPlaybackRate = 1.0;
+                    
+                    p.mpvState = {
+                        seeking: false,
+                        pausedForCache: false,
+                        cacheBufferingState: 100,
+                        eofReached: false,
+                        hasVideoOut: false,
+                        bufferProbing: false,
+                        timePos: 0
+                    };
+                    
+                    p._updateMpvState = function(key, value, isProgrammatic) {
+                        if (key === 'seeking') {
+                            var oldSeeking = this.mpvState.seeking;
+                            this.mpvState.seeking = value;
+                            console.log('SyncTV [mpv-state] seeking=' + value + ' programmatic=' + !!isProgrammatic);
+                            if (oldSeeking !== value) {
+                                if (typeof isSyncing !== 'undefined' && !isSyncing && !isProgrammatic) {
+                                    if (value) {
+                                        this.dispatchEvent(new Event('seeking'));
+                                    } else {
+                                        this.dispatchEvent(new Event('seeked'));
+                                    }
+                                }
+                            }
+                        }
+                        else if (key === 'paused-for-cache') this.mpvState.pausedForCache = value;
+                        else if (key === 'cache-buffering-state') this.mpvState.cacheBufferingState = value;
+                        else if (key === 'eof-reached') this.mpvState.eofReached = value;
+                        else if (key === 'has-video-out') this.mpvState.hasVideoOut = value;
+                        else if (key === 'buffer-probing') this.mpvState.bufferProbing = value;
+                        else if (key === 'time-pos') this.mpvState.timePos = value;
+                    };
+
+                    p._setPausedNative = function(paused, isRemoteSync) {
+                        this._syncingFromNative = true;
+                        this._mockPaused = paused;
+                        if (paused) {
+                            this.dispatchEvent(new Event('pause'));
+                        } else {
+                            this.dispatchEvent(new Event('play'));
+                            this.dispatchEvent(new Event('playing'));
+                        }
+                        this._syncingFromNative = false;
+                    };
+
+                    p._setCurrentTimeNative = function(time, isRemoteSync) {
+                        this._syncingFromNative = true;
+                        this._mockCurrentTime = time;
+                        if (this.mpvState) this.mpvState.timePos = time;
+                        this.dispatchEvent(new Event('timeupdate'));
+                        this._syncingFromNative = false;
+                    };
+
+                    p._setDurationNative = function(duration) {
+                        this._mockDuration = duration;
+                        this.dispatchEvent(new Event('durationchange'));
+                    };
+
+                    p._setSpeedNative = function(speed, isRemoteSync) {
+                        this._syncingFromNative = true;
+                        this._mockPlaybackRate = speed;
+                        this.dispatchEvent(new Event('ratechange'));
+                        this._syncingFromNative = false;
+                    };
+
+                    var nativeSrc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+                    if (!nativeSrc) {
+                        nativeSrc = Object.getOwnPropertyDescriptor(p.constructor.prototype, 'src');
+                    }
+
+                    if (nativeSrc && nativeSrc.set) {
+                        Object.defineProperty(p, 'src', {
+                            get: function() { return this._mockSrc || ""; },
+                            set: function(val) {
+                                this._mockSrc = val;
+                                try {
+                                    var title = document.title || "Video";
+                                    AndroidBridge.onVideoSrcChanged(val, title);
+                                } catch(e) { console.error(e); }
+                            }
+                        });
+                        
+                        Object.defineProperty(p, 'currentTime', {
+                            get: function() { return this._mockCurrentTime; },
+                            set: function(val) {
+                                this._mockCurrentTime = val;
+                                if (this._syncingFromNative) return;
+                                try {
+                                    AndroidBridge.onVideoSeek(val, typeof isSyncing !== 'undefined' ? isSyncing : false);
+                                } catch(e) {}
+                            }
+                        });
+
+                        Object.defineProperty(p, 'duration', {
+                            get: function() { return this._mockDuration; },
+                            set: function() {}
+                        });
+
+                        Object.defineProperty(p, 'paused', {
+                            get: function() { return this._mockPaused; },
+                            set: function() {}
+                        });
+
+                        Object.defineProperty(p, 'seeking', {
+                            get: function() { return this.mpvState ? this.mpvState.seeking : false; }
+                        });
+
+                        Object.defineProperty(p, 'playbackRate', {
+                            get: function() { return this._mockPlaybackRate; },
+                            set: function(val) {
+                                this._mockPlaybackRate = val;
+                                this.dispatchEvent(new Event('ratechange'));
+                                if (this._syncingFromNative) return;
+                                try {
+                                    AndroidBridge.onVideoSpeedChange(val, typeof isSyncing !== 'undefined' ? isSyncing : false);
+                                } catch(e) {}
+                            }
+                        });
+
+                        p.play = function() {
+                            this._mockPaused = false;
+                            if (this._syncingFromNative) return Promise.resolve();
+                            AndroidBridge.onVideoPlay(typeof isSyncing !== 'undefined' ? isSyncing : false);
+                            return Promise.resolve();
+                        };
+
+                        p.pause = function() {
+                            this._mockPaused = true;
+                            if (this._syncingFromNative) return;
+                            AndroidBridge.onVideoPause(typeof isSyncing !== 'undefined' ? isSyncing : false);
+                        };
+
+                        p.load = function() {
+                            console.log("Mocked video.load() suppressed.");
+                        };
+                    }
+                }, 500);
+            })();
+        """.trimIndent()
+    }
+
     companion object {
         private const val TAG = "mpv"
+        private const val SYNC_TAG = "SyncTV"
         // how long should controls be displayed on screen (ms)
         private const val CONTROLS_DISPLAY_TIMEOUT = 1500L
         // how long controls fade to disappear (ms)

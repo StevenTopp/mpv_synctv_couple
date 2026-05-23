@@ -16,6 +16,11 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent">
 
+        <is.xyz.mpv.sync.DanmakuView
+            android:id="@+id/danmakuView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
         <LinearLayout
             android:id="@+id/controls"
             style="?buttonBarStyle"
@@ -215,6 +220,37 @@
             tools:text="[gesture]" />
 
         <LinearLayout
+            android:id="@+id/nativeSyncOverlay"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_centerInParent="true"
+            android:background="#bf000000"
+            android:orientation="horizontal"
+            android:paddingLeft="24dp"
+            android:paddingRight="24dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp"
+            android:gravity="center"
+            android:visibility="gone"
+            tools:visibility="visible">
+
+            <ProgressBar
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:layout_marginEnd="12dp"
+                android:indeterminate="true"
+                android:indeterminateTint="#FFFFFF" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="同步中..."
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
             android:id="@+id/top_controls"
             style="?buttonBarStyle"
             android:layout_width="wrap_content"
@@ -248,6 +284,17 @@
                 app:tint="@color/tint_normal" />
 
             <ImageButton
+                android:id="@+id/topSyncBtn"
+                style="?buttonBarButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="40dp"
+                android:minHeight="40dp"
+                android:padding="4dp"
+                app:srcCompat="@drawable/ic_shuffle_24dp"
+                app:tint="@color/tint_normal" />
+
+            <ImageButton
                 android:id="@+id/topMenuBtn"
                 style="?buttonBarButtonStyle"
                 android:layout_width="wrap_content"
@@ -273,6 +320,56 @@
             android:layout_marginBottom="24dp"
             android:visibility="gone"
             app:srcCompat="@drawable/ic_lock_open_24dp" />
+
+        <LinearLayout
+            android:id="@+id/syncPanel"
+            android:layout_width="340dp"
+            android:layout_height="match_parent"
+            android:layout_alignParentEnd="true"
+            android:background="#e0212121"
+            android:orientation="vertical"
+            android:visibility="gone"
+            android:clickable="true"
+            android:focusable="true">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:padding="8dp"
+                android:gravity="center_vertical"
+                android:background="#1e2640">
+
+                <EditText
+                    android:id="@+id/syncServerUrlInput"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:hint="SyncTV Server URL"
+                    android:textColor="#FFFFFF"
+                    android:textColorHint="#80FFFFFF"
+                    android:inputType="textUri"
+                    android:textSize="12sp"
+                    android:maxLines="1"
+                    android:imeOptions="actionGo" />
+
+                <ImageButton
+                    android:id="@+id/syncServerGoBtn"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    app:srcCompat="@drawable/ic_play_arrow_black_24dp"
+                    app:tint="#FFFFFF" />
+
+            </LinearLayout>
+
+            <WebView
+                android:id="@+id/syncWebView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="#111424" />
+
+        </LinearLayout>
 
     </RelativeLayout>
 

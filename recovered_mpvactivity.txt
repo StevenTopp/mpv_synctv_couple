@@ -1,0 +1,350 @@
+import java.io.File
+import java.lang.IllegalArgumentException
+import kotlin.math.roundToInt
+import is.xyz.mpv.sync.*
+
+typealias ActivityResultCallback = (Int, Intent?) -> Unit
+typealias StateRestoreCallback = () -> Unit
+
+class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObserver,
+    SyncPlayManager.PlayerController, SyncPlayManager.RoomListener {
+    
+    private lateinit var syncManager: SyncPlayManager
+
+    // for calls to eventUi() and eventPropertyUi()
+    private val eventUiHandler = Handler(Looper.getMainLooper())
+    // for use with fadeRunnable1..3
+    private val fadeHandler = Handler(Looper.getMainLooper())
+    // for use with stopServiceRunnable
+    private val stopServiceHandler = Handler(Looper.getMainLooper())
+
+=====
+
+        binding = PlayerBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        syncManager = SyncPlayManager(this, this)
+        val prefs = getDefaultSharedPreferences(applicationContext)
+        binding.syncServerInput.setText(prefs.getString("sync_server", "http://10.0.2.2:8080"))
+        binding.syncRoomInput.setText(prefs.getString("sync_room", ""))
+
+        // Init controls to be hidden and view fullscreen
+        hideControls()
+
+=====
+
+import `is`.xyz.mpv.sync.*
+
+=====
+
+            binding.syncSendDanmakuBtn.isEnabled = true
+            showToast("Connected to Room: ${roomState.room}")
+        }
+
+=====
+
+        player.addObserver(this)
+        player.initialize(filesDir.path, cacheDir.path)
+        if (filepath == "synctv://") {
+            binding.syncPanel.visibility = View.VISIBLE
+            showControls()
+        } else {
+            player.playFile(filepath)
+        }
+
+=====
+
+        syncManager = SyncPlayManager(this, this)
+        val prefs = getDefaultSharedPreferences(applicationContext)
+        binding.syncServerInput.setText(prefs.getString("sync_server", "http://www.monsieursteve.top:30003/"))
+
+=====
+
+    override fun dispatchKeyEvent(ev: KeyEvent): Boolean {
+        if (lockedUI) {
+            showUnlockControls()
+            return super.dispatchKeyEvent(ev)
+        }
+
+        if (currentFocus is android.widget.EditText) {
+            return super.dispatchKeyEvent(ev)
+        }
+
+        // try built-in event handler first, forward all other events to libmpv
+        val handled = interceptDpad(ev) ||
+                (ev.action == KeyEvent.ACTION_DOWN && interceptKeyDown(ev)) ||
+                player.onKey(ev)
+        if (handled) {
+            return true
+        }
+        return super.dispatchKeyEvent(ev)
+    }
+
+=====
+
+import java.io.File
+import java.lang.IllegalArgumentException
+import kotlin.math.roundToInt
+import `is`.xyz.mpv.sync.*
+import android.webkit.*
+
+typealias ActivityResultCallback = (Int, Intent?) -> Unit
+
+=====
+
+class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObserver {
+
+=====
+
+"            topSyncBtn.setOnClickListener {\n                if (syncPanel.visibility == View.VISIBLE) {\n                    syncPanel.visibility = View.GONE\n                } else {\n                    syncPanel.visibility = View.VISIBLE\n                    showControls()\n                }\n            }\n\n            // WebView setup\n            val prefs = getDefaultSharedPreferences(applicationContext)\n            val defaultServer = prefs.getString(\"sync_server\", \"http://www.monsieursteve.top:30003/\") ?: \"http://www.monsieursteve.top:30003/\"\n            syncServerUrlInput.setText(defaultServer)\n\n            syncWebView.settings.javaScriptEnabled = true\n            syncWebView.settings.domStorageEnabled = true\n            syncWebView.settings.databaseEnabled = true\n            syncWebView.settings.mediaPlaybackRequiresUserGesture = false\n\n            syncWebView.webViewClient = object : WebViewClient() {\n                override fun onPageFinished(view: WebView?, url: String?) {\n                    super.onPageFinished(view, url)\n                    view?.evaluateJavascript(getMonkeyPatchJs(), null)\n                }\n            }\n            syncWebView.webChromeClient = WebChromeClient()\n            syncWebView.addJavascriptInterface(AndroidBridge(), \"AndroidBridge\")\n            syncWebView.loadUrl(defaultServer)\n\n            syncServerGoBtn.setOnClickListener {\n                val url = syncServerUrlInput.text.toString().trim()\n                if (url.isNotEmpty()) {\n                    var targetUrl = url\n                    if (!targetUrl.startsWith(\"http://\") && !targetUrl.startsWith(\"https://\")) {\n                        targetUrl = \"http://$targetUrl\"\n                    }\n                    prefs.edit().putString(\"sync_server\", targetUrl).apply()\n                    syncWebView.loadUrl(targetUrl)\n                }\n            }\n\n            syncServerUrlInput.setOnEditorActionListener { _, actionId, _ ->\n                if (actionId == android.
+<truncated 298 bytes>
+
+=====
+
+
+
+=====
+
+        binding.syncWebView.destroy()
+
+=====
+
+    private fun showToast(msg: String, cancel: Boolean = false) {
+        if (cancel)
+            toast?.cancel()
+        toast = Toast.makeText(this, msg, Toast.LENGTH_SHORT).apply {
+            setGravity(Gravity.TOP or Gravity.CENTER_HORIZONTAL, 0, 0)
+            show()
+        }
+    }
+
+=====
+
+"    inner class AndroidBridge {\n        @JavascriptInterface\n        fun onVideoSrcChanged(url: String, title: String) {\n            runOnUiThread {\n                val serverUrl = binding.syncServerUrlInput.text.toString().trim()\n                val absoluteUrl = if (url.startsWith(\"/\")) {\n                    val base = if (serverUrl.endsWith(\"/\")) serverUrl.substring(0, serverUrl.length - 1) else serverUrl\n                    base + url\n                } else {\n                    url\n                }\n                Log.d(TAG, \"onVideoSrcChanged: $absoluteUrl ($title)\")\n                loadVideoWithHeaders(absoluteUrl, \"replace\", title)\n            }\n        }\n\n        @JavascriptInterface\n        fun onVideoPlay(isRemoteSync: Boolean) {\n            runOnUiThread {\n                Log.d(TAG, \"onVideoPlay: isRemoteSync=$isRemoteSync\")\n                player.paused = false\n            }\n        }\n\n        @JavascriptInterface\n        fun onVideoPause(isRemoteSync: Boolean) {\n            runOnUiThread {\n                Log.d(TAG, \"onVideoPause: isRemoteSync=$isRemoteSync\")\n                player.paused = true\n            }\n        }\n\n        @JavascriptInterface\n        fun onVideoSeek(seconds: Double, isRemoteSync: Boolean) {\n            runOnUiThread {\n                Log.d(TAG, \"onVideoSeek: seconds=$seconds, isRemoteSync=$isRemoteSync\")\n                player.timePos = seconds\n            }\n        }\n\n        @JavascriptInterface\n        fun onDanmakuReceived(text: String, color: String) {\n            runOnUiThread {\n                binding.danmakuView.addDanmaku(text, color)\n            }\n        }\n    }\n\n    private fun getMonkeyPatchJs(): String {\n        return \"\"\"\n            (function() {\n                var style = document.createElement('style');\n                style.type = 'text/css';\n                style.innerHTML = ' \\\n                    .topbar { display: none !important; } \\\n                    .theater { display: none
+<truncated 7831 bytes>
+
+=====
+
+"    inner class AndroidBridge {\n        @JavascriptInterface\n        fun onVideoSrcChanged(url: String, title: String) {\n            runOnUiThread {\n                val serverUrl = binding.syncServerUrlInput.text.toString().trim()\n                val absoluteUrl = if (url.startsWith(\"/\")) {\n                    val base = if (serverUrl.endsWith(\"/\")) serverUrl.substring(0, serverUrl.length - 1) else serverUrl\n                    base + url\n                } else {\n                    url\n                }\n                Log.d(TAG, \"onVideoSrcChanged: $absoluteUrl ($title)\")\n                loadVideoWithHeaders(absoluteUrl, \"replace\", title)\n            }\n        }\n\n        @JavascriptInterface\n        fun onVideoPlay(isRemoteSync: Boolean) {\n            runOnUiThread {\n                Log.d(TAG, \"onVideoPlay: isRemoteSync=$isRemoteSync\")\n                player.paused = false\n            }\n        }\n\n        @JavascriptInterface\n        fun onVideoPause(isRemoteSync: Boolean) {\n            runOnUiThread {\n                Log.d(TAG, \"onVideoPause: isRemoteSync=$isRemoteSync\")\n                player.paused = true\n            }\n        }\n\n        @JavascriptInterface\n        fun onVideoSeek(seconds: Double, isRemoteSync: Boolean) {\n            runOnUiThread {\n                Log.d(TAG, \"onVideoSeek: seconds=$seconds, isRemoteSync=$isRemoteSync\")\n                player.timePos = seconds\n            }\n        }\n\n        @JavascriptInterface\n        fun onDanmakuReceived(text: String, color: String) {\n            runOnUiThread {\n                binding.danmakuView.addDanmaku(text, color)\n            }\n        }\n    }\n\n    private fun getMonkeyPatchJs(): String {\n        return \"\"\"\n            (function() {\n                var style = document.createElement('style');\n                style.type = 'text/css';\n                style.innerHTML = ' \\\n                    .topbar { display: none !important; } \\\n                    .theater { display: none
+<truncated 7831 bytes>
+
+=====
+
+    private fun eventPropertyUi(property: String, value: Boolean) {
+        if (!activityIsForeground) return
+        when (property) {
+            "pause" -> {
+                updatePlaybackStatus(value)
+                syncPlayerStateToWebView("pause", value)
+            }
+            "mute" -> { // indirectly from updateAudioPresence()
+                updateAudioUI()
+            }
+        }
+    }
+
+    private fun eventPropertyUi(property: String, value: Long) {
+        if (!activityIsForeground) return
+        when (property) {
+            "time-pos" -> {
+                updatePlaybackPos(psc.positionSec)
+                syncPlayerStateToWebView("time-pos", psc.positionSec)
+            }
+            "playlist-pos", "playlist-count" -> updatePlaylistButtons()
+        }
+    }
+
+    private fun eventPropertyUi(property: String, value: Double) {
+        if (!activityIsForeground) return
+        when (property) {
+            "duration/full" -> {
+                updatePlaybackDuration(psc.durationSec)
+                syncPlayerStateToWebView("duration/full", psc.durationSec)
+            }
+            "video-params/aspect", "video-params/rotate" -> {
+                updateOrientation()
+                updatePiPParams()
+            }
+        }
+    }
+
+=====
+
+"    private fun getMonkeyPatchJs(): String {\n        return \"\"\"\n            (function() {\n                // Periodic style application depending on pathname\n                function applyStyles() {\n                    if (window.location.pathname.indexOf('/room/') !== -1) {\n                        if (!document.getElementById('synctv-custom-style')) {\n                            var style = document.createElement('style');\n                            style.id = 'synctv-custom-style';\n                            style.type = 'text/css';\n                            style.innerHTML = ' \\\n                                .topbar { display: none !important; } \\\n                                .theater { display: none !important; } \\\n                                .layout { grid-template-columns: 1fr !important; gap: 0 !important; } \\\n                                .side { grid-template-columns: 1fr !important; gap: 10px !important; } \\\n                                .panel { padding: 12px !important; margin-bottom: 10px !important; } \\\n                                ::-webkit-scrollbar { display: none !important; } \\\n                            ';\n                            document.head.appendChild(style);\n                        }\n                    } else {\n                        var style = document.getElementById('synctv-custom-style');\n                        if (style) {\n                            style.remove();\n                        }\n                    }\n                }\n                applyStyles();\n                setInterval(applyStyles, 500);\n\n                // Periodic player mocking check\n                setInterval(function() {\n                    var p = document.getElementById('player');\n                    if (!p || p._isMocked) return;\n                    p._isMocked = true;\n\n                    p._mockCurrentTime = 0;\n                    p._mockDuration = 0;\n                    p._mockPaused = true;\n                    p._syncingFrom
+<truncated 5958 bytes>
+
+=====
+
+"    private fun getMonkeyPatchJs(): String {\n        return \"\"\"\n            (function() {\n                // Periodic style application depending on pathname\n                function applyStyles() {\n                    if (window.location.pathname.indexOf('/room/') !== -1) {\n                        if (!document.getElementById('synctv-custom-style')) {\n                            var style = document.createElement('style');\n                            style.id = 'synctv-custom-style';\n                            style.type = 'text/css';\n                            style.innerHTML = ' \\\n                                .topbar { display: none !important; } \\\n                                .theater { display: none !important; } \\\n                                .layout { grid-template-columns: 1fr !important; gap: 0 !important; } \\\n                                .side { grid-template-columns: 1fr !important; gap: 10px !important; } \\\n                                .panel { padding: 12px !important; margin-bottom: 10px !important; } \\\n                                ::-webkit-scrollbar { display: none !important; } \\\n                            ';\n                            document.head.appendChild(style);\n                        }\n                    } else {\n                        var style = document.getElementById('synctv-custom-style');\n                        if (style) {\n                            style.remove();\n                        }\n                    }\n                }\n                applyStyles();\n                setInterval(applyStyles, 500);\n\n                // Periodic player mocking check\n                setInterval(function() {\n                    var p = document.querySelector('video');\n                    if (!p || p._isMocked) return;\n                    p._isMocked = true;\n\n                    p._mockCurrentTime = 0;\n                    p._mockDuration = 0;\n                    p._mockPaused = true;\n                    p._syncingFromNa
+<truncated 8505 bytes>
+
+=====
+
+    private fun loadVideoWithHeaders(url: String, mode: String = "replace", title: String? = null) {
+        var userAgent = ""
+        var referer = ""
+        if (url.contains("baidupcs.com") || url.contains("pcs.baidu.com")) {
+            userAgent = "pan.baidu.com"
+            referer = "https://pan.baidu.com/"
+        }
+        try {
+            // Set properties/options globally instead of as options in loadfile command,
+            // avoiding the "The loadfile option must be an integer" argument parsing error in newer mpv versions.
+            MPVLib.setPropertyString("user-agent", userAgent)
+            MPVLib.setPropertyString("http-header-fields", if (referer.isNotEmpty()) "Referer: $referer" else "")
+            MPVLib.setPropertyString("force-media-title", title ?: "")
+
+            Log.d(TAG, "loadVideoWithHeaders: set user-agent='$userAgent', referer='$referer', title='${title ?: ""}'")
+            Log.d(TAG, "loadVideoWithHeaders: loading $url, mode=$mode")
+            MPVLib.command(arrayOf("loadfile", url, mode))
+            Log.d(TAG, "loadVideoWithHeaders: loadfile command executed successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "loadVideoWithHeaders: failed to execute loadfile command", e)
+        }
+    }
+
+=====
+
+                MenuItem(R.id.subBtn) {
+                    val subUrl = onlineSubtitleUrl
+                    if (!subUrl.isNullOrEmpty()) {
+                        try {
+                            MPVLib.command(arrayOf("sub-add", subUrl, "select"))
+                            android.widget.Toast.makeText(this@MPVActivity, "已加载同步在线字幕", android.widget.Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "sub-add online error: ${e.message}", e)
+                        }
+                        restoreState()
+                    } else {
+                        openFilePickerFor(RCODE_EXTERNAL_SUB, R.string.open_external_sub) { result, data ->
+                            addExternalThing("sub-add", result, data)
+                            restoreState()
+                        }
+                    }
+                    false
+                },
+
+=====
+
+    private var onlineSubtitleUrl: String? = null
+
+    // Remote synchronization state flags to prevent broadcast feedback loops
+    private var isRemotePlaySync = false
+    private var isRemotePauseSync = false
+    private var isRemoteSeekSync = false
+    private var isRemoteSpeedSync = false
+
+    private var toast: Toast? = null
+
+=====
+
+"        @JavascriptInterface\n        fun onVideoPlay(isRemoteSync: Boolean) {\n            runOnUiThread {\n                Log.d(TAG, \"AndroidBridge onVideoPlay: isRemoteSync=$isRemoteSync\")\n                if (isRemoteSync) {\n                    isRemotePlaySync = true\n                }\n                try {\n                    player.paused = false\n                    Log.d(TAG, \"AndroidBridge onVideoPlay: set player.paused to false\")\n                } catch (e: Exception) {\n                    Log.e(TAG, \"AndroidBridge onVideoPlay error: ${e.message}\", e)\n                }\n            }\n        }\n\n        @JavascriptInterface\n        fun onVideoPause(isRemoteSync: Boolean) {\n            runOnUiThread {\n                Log.d(TAG, \"AndroidBridge onVideoPause: isRemoteSync=$isRemoteSync\")\n                if (isRemoteSync) {\n                    isRemotePauseSync = true\n                }\n                try {\n                    player.paused = true\n                    Log.d(TAG, \"AndroidBridge onVideoPause: set player.paused to true\")\n                } catch (e: Exception) {\n                    Log.e(TAG, \"AndroidBridge onVideoPause error: ${e.message}\", e)\n                }\n            }\n        }\n\n        @JavascriptInterface\n        fun onVideoSeek(seconds: Double, isRemoteSync: Boolean) {\n            runOnUiThread {\n                Log.d(TAG, \"AndroidBridge onVideoSeek: seconds=$seconds, isRemoteSync=$isRemoteSync\")\n                if (isRemoteSync) {\n                    isRemoteSeekSync = true\n                }\n                try {\n                    player.timePos = seconds\n                    Log.d(TAG, \"AndroidBridge onVideoSeek: set player.timePos to $seconds\")\n                } catch (e: Exception) {\n                    Log.e(TAG, \"AndroidBridge onVideoSeek error: ${e.message}\", e)\n                }\n            }\n        }\n\n        @JavascriptInterface\n        fun onDanmakuReceived(text: String, color: String) {\n            runOnUiThre
+<truncated 774 bytes>
+
+=====
+
+        @JavascriptInterface
+        fun onVideoSpeedChange(speed: Double, isRemoteSync: Boolean) {
+            runOnUiThread {
+                Log.d(TAG, "AndroidBridge onVideoSpeedChange: speed=$speed, isRemoteSync=$isRemoteSync")
+                if (isRemoteSync) {
+                    isRemoteSpeedSync = true
+                }
+                try {
+                    player.playbackSpeed = speed
+                    Log.d(TAG, "AndroidBridge onVideoSpeedChange: set player.playbackSpeed to $speed")
+                } catch (e: Exception) {
+                    Log.e(TAG, "AndroidBridge onVideoSpeedChange error: ${e.message}", e)
+                }
+            }
+        }
+
+=====
+
+"    private fun eventPropertyUi(property: String, value: Boolean) {\n        if (!activityIsForeground) return\n        when (property) {\n            \"pause\" -> {\n                updatePlaybackStatus(value)\n                val isRemote = if (value) {\n                    val r = isRemotePauseSync\n                    isRemotePauseSync = false\n                    r\n                } else {\n                    val r = isRemotePlaySync\n                    isRemotePlaySync = false\n                    r\n                }\n                syncPlayerStateToWebView(\"pause\", value, isRemote)\n            }\n            \"mute\" -> { // indirectly from updateAudioPresence()\n                updateAudioUI()\n            }\n        }\n    }\n\n    private fun eventPropertyUi(property: String, value: Long) {\n        if (!activityIsForeground) return\n        when (property) {\n            \"time-pos\" -> {\n                updatePlaybackPos(psc.positionSec)\n                val isRemote = isRemoteSeekSync\n                isRemoteSeekSync = false\n                syncPlayerStateToWebView(\"time-pos\", psc.positionSec, isRemote)\n            }\n            \"playlist-pos\", \"playlist-count\" -> updatePlaylistButtons()\n        }\n    }\n\n    private fun eventPropertyUi(property: String, value: Double) {\n        if (!activityIsForeground) return\n        when (property) {\n            \"duration/full\" -> {\n                updatePlaybackDuration(psc.durationSec)\n                syncPlayerStateToWebView(\"duration/full\", psc.durationSec)\n            }\n            \"video-params/aspect\", \"video-params/rotate\" -> {\n                updateOrientation()\n                updatePiPParams()\n            }\n        }\n    }\n\n    private fun eventPropertyUi(property: String, value: String, metaUpdated: Boolean) {\n        if (!activityIsForeground) return\n        when (property) {\n            \"speed\" -> {\n                updateSpeedButton()\n                val speedVal = value.toDoubleOrNull() ?: 1.0\n  
+<truncated 259 bytes>
+
+=====
+
+    private fun syncPlayerStateToWebView(property: String, value: Any, isRemoteSync: Boolean = false) {
+        val script = when (property) {
+            "pause" -> "if (typeof player !== 'undefined' && typeof player._setPausedNative === 'function') { player._setPausedNative($value, $isRemoteSync); }"
+            "time-pos" -> "if (typeof player !== 'undefined' && typeof player._setCurrentTimeNative === 'function') { player._setCurrentTimeNative($value, $isRemoteSync); }"
+            "duration/full" -> "if (typeof player !== 'undefined' && typeof player._setDurationNative === 'function') { player._setDurationNative($value); }"
+            "speed" -> "if (typeof player !== 'undefined' && typeof player._setSpeedNative === 'function') { player._setSpeedNative($value, $isRemoteSync); }"
+            else -> null
+        }
+        script?.let {
+            runOnUiThread {
+                Log.d(TAG, "syncPlayerStateToWebView: property=$property, value=$value, isRemoteSync=$isRemoteSync")
+                binding.syncWebView.evaluateJavascript(it) { result ->
+                    Log.d(TAG, "syncPlayerStateToWebView evaluated result: $result")
+                }
+            }
+        }
+    }
+
+=====
+
+"                        Object.defineProperty(p, 'playbackRate', {\n                            get: function() { return this._mockPlaybackRate; },\n                            set: function(val) {\n                                console.log(\"SyncTV Monkey Patch: video.playbackRate setter invoked with: \" + val + \", syncingNative=\" + this._syncingFromNative);\n                                this._mockPlaybackRate = val;\n                                this.dispatchEvent(new Event('ratechange'));\n                                if (this._syncingFromNative) return;\n                                try {\n                                    AndroidBridge.onVideoSpeedChange(val, typeof isSyncing !== 'undefined' ? isSyncing : false);\n                                } catch(e) {\n                                    console.error(\"SyncTV Monkey Patch: error calling onVideoSpeedChange\", e);\n                                }\n                            }\n                        });\n\n                        p.play = function() {\n                            console.log(\"SyncTV Monkey Patch: video.play() invoked, syncingNative=\" + this._syncingFromNative);\n                            this._mockPaused = false;\n                            if (this._syncingFromNative) return Promise.resolve();\n                            AndroidBridge.onVideoPlay(typeof isSyncing !== 'undefined' ? isSyncing : false);\n                            return Promise.resolve();\n                        };\n\n                        p.pause = function() {\n                            console.log(\"SyncTV Monkey Patch: video.pause() invoked, syncingNative=\" + this._syncingFromNative);\n                            this._mockPaused = true;\n                            if (this._syncingFromNative) return;\n                            AndroidBridge.onVideoPause(typeof isSyncing !== 'undefined' ? isSyncing : false);\n                        };\n\n                        p.canPlayType = function(type) {\n                            cons
+<truncated 4269 bytes>
+
+=====
+
+    private fun loadVideoWithHeaders(url: String, mode: String = "replace", title: String? = null) {
+        var userAgent = ""
+        var referer = ""
+        if (url.contains("baidupcs.com") || url.contains("pcs.baidu.com")) {
+            userAgent = "pan.baidu.com"
+            referer = "" // DO NOT send Referer to match working curl behavior
+        }
+        try {
+            val headers = mutableListOf<String>()
+            if (userAgent.isNotEmpty()) headers.add("User-Agent: $userAgent")
+            if (referer.isNotEmpty()) headers.add("Referer: $referer")
+
+            // Set properties/options globally instead of as options in loadfile command,
+            // avoiding the "The loadfile option must be an integer" argument parsing error in newer mpv versions.
+            MPVLib.setPropertyString("user-agent", userAgent)
+            MPVLib.setPropertyString("http-header-fields", headers.joinToString(","))
+            MPVLib.setPropertyString("force-media-title", title ?: "")
+
+=====
+
+            PropertyChange.PlayPause -> player.cyclePause()
+            PropertyChange.Custom -> {
+                val keycode = 0x10002 + diff.toInt()
+                MPVLib.command(arrayOf("keypress", "0x%x".format(keycode)))
+            }
+        }
+    }
+
+    private fun loadVideoWithHeaders(url: String, mode: String = "replace", title: String? = null) {
+        var userAgent = ""
+        var referer = ""
+        if (url.contains("baidupcs.com") || url.contains("pcs.baidu.com")) {
+            userAgent = "pan.baidu.com"
+            referer = "" // DO NOT send Referer to match working curl behavior
+        }
+        try {
+            val headers = mutableListOf<String>()
+            if (userAgent.isNotEmpty()) headers.add("User-Agent: $userAgent")
+            if (referer.isNotEmpty()) headers.add("Referer: $referer")
+
+            // Set properties/options globally instead of as options in loadfile command,
+            // avoiding the "The loadfile option must be an integer" argument parsing error in newer mpv versions.
+            MPVLib.setPropertyString("user-agent", userAgent)
+            MPVLib.setPropertyString("http-header-fields", headers.joinToString(","))
+            MPVLib.setPropertyString("force-media-title", title ?: "")
+
+            Log.d(TAG, "loadVideoWithHeaders: set user-agent='$userAgent', referer='$referer', title='${title ?: ""}'")
+            Log.d(TAG, "loadVideoWithHeaders: loading $url, mode=$mode")
+            MPVLib.command(arrayOf("loadfile", url, mode))
+            Log.d(TAG, "loadVideoWithHeaders: loadfile command executed successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "loadVideoWithHeaders: failed to execute loadfile command", e)
+        }
+    }
+
+=====
+
