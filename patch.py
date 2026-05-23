@@ -40,7 +40,7 @@ if 'private var mpvSeeking' not in text:
 webview_setup = '''
             // WebView setup
             val prefs = getDefaultSharedPreferences(applicationContext)
-            val defaultServer = prefs.getString("sync_server", "http://www.monsieursteve.top:30003/") ?: "http://www.monsieursteve.top:30003/"
+            val defaultServer = prefs.getString("sync_server", "http://127.0.0.1:30008") ?: "http://127.0.0.1:30008"
             binding.syncServerUrlInput.setText(defaultServer)
 
             binding.syncWebView.settings.javaScriptEnabled = true
