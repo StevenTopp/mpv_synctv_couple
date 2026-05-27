@@ -40,4 +40,11 @@
         android:summary="@string/pref_playlist_exit_warning_summary"
         android:title="@string/pref_playlist_exit_warning_title" />
 
+    <SwitchPreferenceCompat
+        app:iconSpaceReserved="false"
+        android:defaultValue="false"
+        android:key="night_mode"
+        android:summary="开启后应用主页与网页播放端将切换为黑灰色夜间模式"
+        android:title="夜间模式" />
+
 </PreferenceScreen>

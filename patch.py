@@ -40,7 +40,7 @@ if 'private var mpvSeeking' not in text:
 webview_setup = '''
             // WebView setup
             val prefs = getDefaultSharedPreferences(applicationContext)
-            val defaultServer = prefs.getString("sync_server", "http://127.0.0.1:30008") ?: "http://127.0.0.1:30008"
+            val defaultServer = prefs.getString("sync_server", "http://www.monsieursteve.top:9990") ?: "http://www.monsieursteve.top:9990"
             binding.syncServerUrlInput.setText(defaultServer)
 
             binding.syncWebView.settings.javaScriptEnabled = true
@@ -172,6 +172,9 @@ bridge = '''
         if (url.contains("baidupcs.com") || url.contains("pcs.baidu.com")) {
             userAgent = "pan.baidu.com"
             referer = "" // DO NOT send Referer to match working curl behavior
+        } else if (url.contains("bilibili") || url.contains("bilivideo.com") || url.contains("biliapi") || url.contains("upos-") || url.contains("akamaized.net") || url.contains("hdslb.com")) {
+            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            referer = "https://www.bilibili.com/"
         }
         try {
             val headers = mutableListOf<String>()

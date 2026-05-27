@@ -17,6 +17,23 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
+import android.os.Handler
+import android.os.Looper
+import android.widget.ProgressBar
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.os.Build
+import android.provider.Settings
+import androidx.core.content.FileProvider
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import java.io.File
+import java.io.IOException
+import java.security.MessageDigest
+import kotlin.concurrent.thread
+import android.widget.Toast
+import android.view.Gravity
 
 class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
     private lateinit var binding: FragmentMainScreenBinding
@@ -114,6 +131,11 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
 
         onConfigurationChanged(view.resources.configuration)
+
+        view.postDelayed({
+            checkAppUpdates()
+        }, 1000)
+        applyNightMode()
     }
 
     private fun showDebugMenu() {
@@ -147,6 +169,53 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
         firstRun = false
         returningFromPlayer = false
+
+        context?.let { ctx ->
+            val updatesDir = File(ctx.cacheDir, "updates")
+            val apkFile = File(updatesDir, "update.apk")
+            if (apkFile.exists()) {
+                val pm = ctx.packageManager
+                val info = pm.getPackageArchiveInfo(apkFile.absolutePath, 0)
+                if (info != null) {
+                    val packageInfo = try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            pm.getPackageInfo(ctx.packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
+                        } else {
+                            pm.getPackageInfo(ctx.packageName, 0)
+                        }
+                    } catch (e: Exception) {
+                        null
+                    }
+                    val currentVersionCode = packageInfo?.versionCode ?: BuildConfig.VERSION_CODE
+                    
+                    val serverVersionCode = info.versionCode
+                    val serverBase = if (serverVersionCode >= 8000) {
+                        if (serverVersionCode >= 8200) serverVersionCode - 8200
+                        else if (serverVersionCode >= 8100) serverVersionCode - 8100
+                        else serverVersionCode - 8000
+                    } else {
+                        serverVersionCode
+                    }
+                    val currentBase = if (currentVersionCode >= 8000) {
+                        if (currentVersionCode >= 8200) currentVersionCode - 8200
+                        else if (currentVersionCode >= 8100) currentVersionCode - 8100
+                        else currentVersionCode - 8000
+                    } else {
+                        currentVersionCode
+                    }
+                    
+                    if (serverBase > currentBase) {
+                        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || pm.canRequestPackageInstalls()) {
+                            AppUpdater.triggerInstall(ctx, apkFile)
+                        }
+                    } else {
+                        android.util.Log.d("mpv", "Cached APK is obsolete (cached:${info.versionCode} <= current:${currentVersionCode}). Deleting.")
+                        apkFile.delete()
+                    }
+                }
+            }
+        }
+        applyNightMode()
     }
 
     private fun saveChoice(type: String, data: String? = null) {
@@ -207,6 +276,60 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         }
         i.setClass(requireContext(), MPVActivity::class.java)
         playerLauncher.launch(i)
+    }
+
+    private fun checkAppUpdates() {
+        val context = context ?: return
+        AppUpdater.checkAppUpdates(context, false)
+    }
+
+    private fun applyNightMode() {
+        val context = context ?: return
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        val nightMode = prefs.getBoolean("night_mode", false)
+        
+        val themeRes = if (nightMode) R.drawable.main_bg_night else R.drawable.main_bg_day
+        val cardRes = if (nightMode) R.drawable.card_bg_night else R.drawable.card_bg_day
+        
+        binding.mainScrollView.setBackgroundResource(themeRes)
+        binding.syncBtn.setBackgroundResource(cardRes)
+        binding.docBtn.setBackgroundResource(cardRes)
+        binding.filepickerBtn.setBackgroundResource(cardRes)
+        binding.settingsBtn.setBackgroundResource(cardRes)
+        
+        // Text Colors
+        val titleColor = if (nightMode) 0xFFF8FAFC.toInt() else 0xFF1E293B.toInt()
+        val subtitleColor = if (nightMode) 0xFF94A3B8.toInt() else 0xFF64748B.toInt()
+        
+        // SyncTV special text colors
+        val syncTitleColor = if (nightMode) 0xFFF8FAFC.toInt() else 0xFF015efb.toInt()
+        val syncSubtitleColor = if (nightMode) 0xFF94A3B8.toInt() else 0xFF3b82f6.toInt()
+        
+        binding.synctvTitle.setTextColor(syncTitleColor)
+        binding.synctvSubtitle.setTextColor(syncSubtitleColor)
+        
+        binding.docTitle.setTextColor(titleColor)
+        binding.docSubtitle.setTextColor(subtitleColor)
+        
+        binding.filepickerTitle.setTextColor(titleColor)
+        binding.filepickerSubtitle.setTextColor(subtitleColor)
+        
+        binding.settingsTitle.setTextColor(titleColor)
+        binding.settingsSubtitle.setTextColor(subtitleColor)
+        
+        // Icon Tints
+        val tintColor = if (nightMode) 0xFFF8FAFC.toInt() else 0xFF015efb.toInt()
+        binding.docIcon.setColorFilter(tintColor)
+        binding.filepickerIcon.setColorFilter(tintColor)
+        binding.settingsIcon.setColorFilter(tintColor)
+        
+        if (nightMode) {
+            binding.logo.setImageResource(R.mipmap.mpv_launcher_foreground)
+            binding.logo.setColorFilter(0xFFFFFFFF.toInt())
+        } else {
+            binding.logo.setImageResource(R.mipmap.mpv_launcher_icon)
+            binding.logo.clearColorFilter()
+        }
     }
 
     companion object {

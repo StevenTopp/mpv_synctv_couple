@@ -1,109 +1,212 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/main_scroll_view"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:gravity="center"
-    android:orientation="vertical"
-    android:padding="24dp">
-
-    <ImageView
-        android:id="@+id/logo"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="3"
-        android:contentDescription="@string/mpv_activity"
-        app:srcCompat="@drawable/mpv_logo" />
-
-    <!-- FIXME this could look better -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="2"
-        android:gravity="center"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/docBtn"
-            style="@style/Widget.AppCompat.Button.Colored"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:drawableTop="@drawable/ic_file_open_48dp"
-            android:text="@string/action_open_doc_tree"
-            android:textColor="@android:color/primary_text_dark" />
-
-        <Button
-            android:id="@+id/urlBtn"
-            style="@style/Widget.AppCompat.Button.Colored"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:drawableTop="@drawable/ic_link_48dp"
-            android:text="@string/action_open_url"
-            android:textColor="@android:color/primary_text_dark" />
-
-    </LinearLayout>
+    android:fillViewport="true"
+    android:background="@drawable/main_bg_day">
 
     <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="2"
-        android:gravity="center"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/filepickerBtn"
-            style="@style/Widget.AppCompat.Button.Colored"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:drawableTop="@drawable/ic_folder_white_48dp"
-            android:text="@string/file_picker_old"
-            android:textColor="@android:color/primary_text_dark" />
-
-        <Button
-            android:id="@+id/settingsBtn"
-            style="@style/Widget.AppCompat.Button.Colored"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:drawableTop="@drawable/ic_settings_black_48dp"
-            android:text="@string/action_settings"
-            android:textColor="@android:color/primary_text_dark" />
-
-    </LinearLayout>
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="2"
-        android:gravity="center"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/syncBtn"
-            style="@style/Widget.AppCompat.Button.Colored"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:drawableTop="@drawable/ic_sync_48dp"
-            android:text="@string/action_synctv"
-            android:textColor="@android:color/primary_text_dark" />
-
-        <Space
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1" />
-
-    </LinearLayout>
-
-    <androidx.appcompat.widget.SwitchCompat
-        android:id="@+id/switch1"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:padding="16dp"
-        android:text="@string/option_remember_choice"
-        app:showText="false" />
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        android:padding="20dp">
 
-</LinearLayout>
+        <!-- Top Big Card: SyncTV -->
+        <LinearLayout
+            android:id="@+id/syncBtn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="32dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="@drawable/card_bg_day">
+
+            <ImageView
+                android:id="@+id/logo"
+                android:layout_width="120dp"
+                android:layout_height="120dp"
+                android:contentDescription="SyncTV Logo"
+                app:srcCompat="@mipmap/mpv_launcher_icon" />
+
+            <TextView
+                android:id="@+id/synctv_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:text="SYNCTV"
+                android:textSize="32sp"
+                android:textStyle="bold"
+                android:textColor="#015efb"
+                android:fontFamily="sans-serif-black"
+                android:letterSpacing="0.05" />
+
+            <TextView
+                android:id="@+id/synctv_subtitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="同步播放与共享"
+                android:textSize="15sp"
+                android:textColor="#3b82f6"
+                android:textStyle="bold" />
+
+        </LinearLayout>
+
+        <!-- Middle Row: Left & Right Cards -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="16dp">
+
+            <!-- Card 2: 打开目录树 -->
+            <LinearLayout
+                android:id="@+id/docBtn"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:padding="24dp"
+                android:layout_marginEnd="8dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="@drawable/card_bg_day">
+
+                <ImageView
+                    android:id="@+id/doc_icon"
+                    android:layout_width="60dp"
+                    android:layout_height="60dp"
+                    android:contentDescription="Document Tree"
+                    app:srcCompat="@drawable/ic_file_open_48dp"
+                    app:tint="#015efb" />
+
+                <TextView
+                    android:id="@+id/doc_title"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="打开目录树"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:textColor="#1e293b" />
+
+                <TextView
+                    android:id="@+id/doc_subtitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="浏览本地目录结构"
+                    android:textSize="12sp"
+                    android:textColor="#64748b" />
+
+            </LinearLayout>
+
+            <!-- Card 3: 文件选择器（旧版） -->
+            <LinearLayout
+                android:id="@+id/filepickerBtn"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:padding="24dp"
+                android:layout_marginStart="8dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="@drawable/card_bg_day">
+
+                <ImageView
+                    android:id="@+id/filepicker_icon"
+                    android:layout_width="60dp"
+                    android:layout_height="60dp"
+                    android:contentDescription="File Picker"
+                    app:srcCompat="@drawable/ic_folder_white_48dp"
+                    app:tint="#015efb" />
+
+                <TextView
+                    android:id="@+id/filepicker_title"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="文件选择器 (旧版)"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:textColor="#1e293b" />
+
+                <TextView
+                    android:id="@+id/filepicker_subtitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="浏览本地文件"
+                    android:textSize="12sp"
+                    android:textColor="#64748b" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <!-- Bottom Card: 设置 -->
+        <LinearLayout
+            android:id="@+id/settingsBtn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="24dp"
+            android:layout_marginTop="16dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="@drawable/card_bg_day">
+
+            <ImageView
+                android:id="@+id/settings_icon"
+                android:layout_width="54dp"
+                android:layout_height="54dp"
+                android:contentDescription="Settings"
+                app:srcCompat="@drawable/ic_settings_black_48dp"
+                app:tint="#015efb" />
+
+            <TextView
+                android:id="@+id/settings_title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="设置"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:textColor="#1e293b" />
+
+            <TextView
+                android:id="@+id/settings_subtitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="自定义应用设置"
+                android:textSize="12sp"
+                android:textColor="#64748b" />
+
+        </LinearLayout>
+
+        <!-- Hidden/Dummy views to maintain ViewBinding compatibility without breaking compiler -->
+        <Button
+            android:id="@+id/urlBtn"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:visibility="gone" />
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/switch1"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:visibility="gone" />
+
+    </LinearLayout>
+
+</ScrollView>

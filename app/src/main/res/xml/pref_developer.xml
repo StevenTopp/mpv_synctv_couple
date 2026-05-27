@@ -10,6 +10,15 @@
         android:title="@string/pref_stats_mode_title"
         app:iconSpaceReserved="false" />
 
+    <ListPreference
+        android:defaultValue="audiotrack,opensles"
+        android:entries="@array/audio_output_entries"
+        android:entryValues="@array/audio_output_values"
+        android:key="audio_output"
+        android:summary="选择音频输出驱动；若某些视频开启声音播放卡死，可切换为 OpenSL ES 或 AAudio"
+        android:title="音频输出驱动 (Audio Output)"
+        app:iconSpaceReserved="false" />
+
     <SwitchPreferenceCompat
         android:defaultValue="false"
         android:key="ignore_audio_focus"

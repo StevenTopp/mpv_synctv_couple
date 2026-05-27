@@ -62,4 +62,18 @@
         android:summary="@string/pref_new_intent_replace_summary"
         android:title="@string/pref_new_intent_replace_title" />
 
+    <EditTextPreference
+        android:defaultValue="http://www.monsieursteve.top:9989/version.json"
+        android:key="update_server_url"
+        app:useSimpleSummaryProvider="true"
+        app:iconSpaceReserved="false"
+        android:hint="http://www.monsieursteve.top:9989/version.json"
+        android:title="应用更新服务器地址" />
+
+    <Preference
+        android:key="check_updates_manual"
+        app:iconSpaceReserved="false"
+        android:title="检查应用更新"
+        android:summary="手动检测服务器上是否有新版本" />
+
 </PreferenceScreen>

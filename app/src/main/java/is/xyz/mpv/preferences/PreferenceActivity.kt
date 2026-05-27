@@ -16,6 +16,7 @@ import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceManager
 import com.google.android.material.color.DynamicColors
 import `is`.xyz.mpv.R
+import `is`.xyz.mpv.AppUpdater
 
 class PreferenceActivity : AppCompatActivity(),
     PreferenceFragmentCompat.OnPreferenceStartFragmentCallback,
@@ -119,6 +120,11 @@ class PreferenceActivity : AppCompatActivity(),
             // hide Material You on Android 11 or lower
             preferenceManager.findPreference<Preference>("material_you_theming")?.isVisible =
                 (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+
+            findPreference<Preference>("check_updates_manual")?.setOnPreferenceClickListener {
+                AppUpdater.checkAppUpdates(requireContext(), true)
+                true
+            }
         }
     }
 

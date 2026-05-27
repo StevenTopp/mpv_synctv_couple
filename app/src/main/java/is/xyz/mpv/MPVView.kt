@@ -98,15 +98,23 @@ internal class MPVView(context: Context, attrs: AttributeSet) : BaseMPVView(cont
         MPVLib.setOptionString("opengl-es", "yes")
         MPVLib.setOptionString("hwdec", hwdec)
         MPVLib.setOptionString("hwdec-codecs", "h264,hevc,mpeg4,mpeg2video,vp8,vp9,av1")
-        MPVLib.setOptionString("ao", "audiotrack,opensles")
+        val ao = sharedPreferences.getString("audio_output", "audiotrack,opensles") ?: "audiotrack,opensles"
+        MPVLib.setOptionString("ao", ao)
         MPVLib.setOptionString("audio-set-media-role", "yes")
+        // Force stereo channel layout globally by default to prevent manufacturer audio HAL mono bugs from deadlocking
+        MPVLib.setOptionString("audio-channels", "stereo")
         MPVLib.setOptionString("tls-verify", "yes")
         MPVLib.setOptionString("tls-ca-file", "${this.context.filesDir.path}/cacert.pem")
         MPVLib.setOptionString("input-default-bindings", "yes")
-        // Limit demuxer cache since the defaults are too high for mobile devices
-        val cacheMegs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) 64 else 32
+        // Optimizations for network stream caching and buffering to prevent lagging on high-latency/slow links
+        MPVLib.setOptionString("cache", "yes")
+        MPVLib.setOptionString("demuxer-readahead-secs", "30")
+        MPVLib.setOptionString("demuxer-seekable-cache", "yes")
+        MPVLib.setOptionString("cache-pause", "yes")
+        // Limit demuxer cache since the defaults are too high for mobile devices, but give it a much more modern headroom
+        val cacheMegs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) 256 else 128
         MPVLib.setOptionString("demuxer-max-bytes", "${cacheMegs * 1024 * 1024}")
-        MPVLib.setOptionString("demuxer-max-back-bytes", "${cacheMegs * 1024 * 1024}")
+        MPVLib.setOptionString("demuxer-max-back-bytes", "${(cacheMegs / 2) * 1024 * 1024}")
         //
         val screenshotDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
         screenshotDir.mkdirs()

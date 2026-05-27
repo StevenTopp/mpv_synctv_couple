@@ -60,7 +60,7 @@ import kotlin.math.roundToInt
 typealias ActivityResultCallback = (Int, Intent?) -> Unit
 typealias StateRestoreCallback = () -> Unit
 
-class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObserver {
+class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, MPVLib.LogObserver, TouchGesturesObserver {
     // for calls to eventUi() and eventPropertyUi()
     private val eventUiHandler = Handler(Looper.getMainLooper())
     // for use with fadeRunnable1..3
@@ -79,6 +79,11 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
     
     private var onlineSubtitleUrl: String? = null
+    private var pendingOnlineSubtitleUrl: String? = null
+    private var pendingOnlineSubtitleTitle: String? = null
+    private var pendingOnlineSubtitleGeneration = 0
+    private var appliedOnlineSubtitleUrl: String? = null
+    private var appliedOnlineSubtitleGeneration = 0
 
     // Remote synchronization state flags to prevent broadcast feedback loops
     private var isRemotePlaySync = false
@@ -89,6 +94,11 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     private var pendingProgrammaticSeekFinish = false
 
     private var toast: Toast? = null
+    private var pendingLocalFileUrl: String? = null
+    private var webViewFilePathCallback: ValueCallback<Array<Uri>>? = null
+
+    // Manual audio compatibility toggle (forces stereo downmix for multi-channel AAC freeze)
+    private var isAudioCompatEnabled = false
 
     // MPV State for SyncTV Ready Probe
     private var mpvSeeking = false
@@ -107,6 +117,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
     // Android MPV Buffer Probe for Remote Seek Sync
     private var currentLoadedUrl: String? = null
+    private var mediaLoadGeneration = 0
+    private var startedMediaGeneration = 0
     private var isBufferProbeActive = false
     private var bufferProbeGeneration = 0
     private var bufferProbeTarget: Double? = null
@@ -265,7 +277,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
             // WebView setup
             val prefs = getDefaultSharedPreferences(applicationContext)
-            val defaultServer = prefs.getString("sync_server", "http://127.0.0.1:30008") ?: "http://127.0.0.1:30008"
+            val defaultServer = prefs.getString("sync_server", "http://www.monsieursteve.top:9990") ?: "http://www.monsieursteve.top:9990"
             syncServerUrlInput.setText(defaultServer)
 
             syncWebView.settings.javaScriptEnabled = true
@@ -277,12 +289,79 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
                     view?.evaluateJavascript(getMonkeyPatchJs(), null)
+                    syncThemeToWebView()
                 }
             }
             syncWebView.webChromeClient = object : WebChromeClient() {
                 override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                     consoleMessage?.let {
                         Log.d("WebConsole", "[${it.messageLevel()}] ${it.message()} -- From line ${it.lineNumber()} of ${it.sourceId()}")
+                    }
+                    return true
+                }
+
+                override fun onShowFileChooser(
+                    webView: WebView?,
+                    filePathCallback: ValueCallback<Array<Uri>>?,
+                    fileChooserParams: FileChooserParams?
+                ): Boolean {
+                    if (webViewFilePathCallback != null) {
+                        webViewFilePathCallback?.onReceiveValue(null)
+                        webViewFilePathCallback = null
+                    }
+                    webViewFilePathCallback = filePathCallback
+
+                    val isSub = fileChooserParams?.acceptTypes?.any {
+                        it.contains("srt") || it.contains("vtt") || it.contains("ass") || it.contains("ssa") || it.contains("subtitle")
+                    } ?: false
+
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        if (isSub) {
+                            type = "*/*"
+                            val mimeTypes = arrayOf(
+                                "text/plain",
+                                "application/octet-stream",
+                                "application/x-subrip",
+                                "text/vtt"
+                            )
+                            putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+                        } else {
+                            type = "video/*"
+                            val mimeTypes = arrayOf("video/*", "application/octet-stream")
+                            putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes)
+                        }
+                    }
+
+                    try {
+                        activityResultCallbacks[RCODE_WEB_FILE_CHOOSER] = { resultCode: Int, intentData: Intent? ->
+                            var results: Array<Uri>? = null
+                            if (resultCode == RESULT_OK && intentData != null) {
+                                var selectedUri: Uri? = null
+                                val clipData = intentData.clipData
+                                val dataString = intentData.dataString
+                                if (clipData != null && clipData.itemCount > 0) {
+                                    selectedUri = clipData.getItemAt(0).uri
+                                } else if (dataString != null) {
+                                    selectedUri = Uri.parse(dataString)
+                                } else if (intentData.data != null) {
+                                    selectedUri = intentData.data
+                                }
+
+                                if (selectedUri != null) {
+                                    results = arrayOf(selectedUri)
+                                    pendingLocalFileUrl = resolveUri(selectedUri)
+                                }
+                            }
+                            webViewFilePathCallback?.onReceiveValue(results)
+                            webViewFilePathCallback = null
+                        }
+                        startActivityForResult(intent, RCODE_WEB_FILE_CHOOSER)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to open file chooser", e)
+                        webViewFilePathCallback?.onReceiveValue(null)
+                        webViewFilePathCallback = null
+                        return false
                     }
                     return true
                 }
@@ -406,8 +485,10 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         }
 
         player.addObserver(this)
+        MPVLib.addLogObserver(this)
         player.initialize(filesDir.path, cacheDir.path)
         if (filepath == "synctv://") {
+            MPVLib.setOptionString("idle", "yes")
             binding.syncPanel.visibility = View.VISIBLE
             showControls()
             updateControlsMargins()
@@ -470,6 +551,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         // take the background service with us
         stopServiceRunnable.run()
 
+        MPVLib.removeLogObserver(this)
         player.removeObserver(this)
         player.destroy()
         binding.syncWebView.destroy()
@@ -486,6 +568,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         if (filepath == null) {
             return
         }
+
+
 
         val host = try { Uri.parse(filepath).host ?: "" } catch (e: Exception) { "" }
         Log.d(SYNC_TAG, "[loadfile] urlHost=$host mode=replace")
@@ -665,6 +749,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
         refreshUi()
 
+        syncThemeToWebView()
         super.onResume()
     }
 
@@ -1451,7 +1536,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     data class MenuItem(@IdRes val idRes: Int, val handler: () -> Boolean)
     private fun genericMenu(
             @LayoutRes layoutRes: Int, buttons: List<MenuItem>, hiddenButtons: Set<Int>,
-            restoreState: StateRestoreCallback) {
+            restoreState: StateRestoreCallback, postInflate: ((View) -> Unit)? = null) {
         lateinit var dialog: AlertDialog
 
         val builder = AlertDialog.Builder(this)
@@ -1468,6 +1553,8 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         }
 
         hiddenButtons.forEach { dialogView.findViewById<View>(it).isVisible = false }
+
+        postInflate?.invoke(dialogView)
 
         if (Utils.visibleChildren(dialogView) == 0) {
             Log.w(TAG, "Not showing menu because it would be empty")
@@ -1497,7 +1584,10 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                 translateContentUri(Uri.parse(path))
             else
                 path
-            MPVLib.command(arrayOf(cmd, path2, "cached"))
+            if (cmd == "sub-add")
+                addSubtitleTrack(path2, "cached", "menu-file")
+            else
+                MPVLib.command(arrayOf(cmd, path2, "cached"))
         }
 
         /******/
@@ -1509,10 +1599,46 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                         restoreState()
                     }; false
                 },
+                MenuItem(R.id.compatBtn) {
+                    isAudioCompatEnabled = !isAudioCompatEnabled
+                    if (isAudioCompatEnabled) {
+                        MPVLib.setPropertyString("audio-channels", "stereo")
+                        MPVLib.setPropertyString("ao", "opensles")
+                        showToast("音频兼容: 开 (立体声 + OpenSL ES)")
+                    } else {
+                        MPVLib.setPropertyString("audio-channels", "stereo")
+                        MPVLib.setPropertyString("ao", "audiotrack,opensles")
+                        showToast("音频兼容: 关 (自动默认)")
+                    }
+                    // Force audio output and track re-initialization to apply driver switch immediately
+                    MPVLib.command(arrayOf("ao-reload"))
+                    val currentAid = player.aid
+                    if (currentAid != -1) {
+                        player.aid = -1
+                        eventUiHandler.postDelayed({
+                            runOnUiThread {
+                                player.aid = currentAid
+                            }
+                        }, 200)
+                    }
+                    // Broadcast to other MPV clients in the room
+                    val js = "if(window.ws&&ws.readyState===1){ws.send(JSON.stringify({type:'audio-compat',enabled:${isAudioCompatEnabled}}))}" 
+                    binding.syncWebView.evaluateJavascript(js, null)
+                    val aoName = if (isAudioCompatEnabled) "opensles" else "audiotrack,opensles"
+                    Log.d(SYNC_TAG, "[audio-compat] toggled to $isAudioCompatEnabled, ao=$aoName, broadcast sent")
+                    true
+                },
                 MenuItem(R.id.subBtn) {
-                    openFilePickerFor(RCODE_EXTERNAL_SUB, R.string.open_external_sub) { result, data ->
-                        addExternalThing("sub-add", result, data)
+                    val subUrl = onlineSubtitleUrl
+                    if (!subUrl.isNullOrEmpty()) {
+                        appliedOnlineSubtitleGeneration = 0
+                        applyOnlineSubtitleIfReady(mediaLoadGeneration, "menu")
                         restoreState()
+                    } else {
+                        openFilePickerFor(RCODE_EXTERNAL_SUB, R.string.open_external_sub) { result, data ->
+                            addExternalThing("sub-add", result, data)
+                            restoreState()
+                        }
                     }; false
                 },
                 MenuItem(R.id.playlistBtn) {
@@ -1567,7 +1693,11 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
             hiddenButtons.add(R.id.rowChapter)
         /******/
 
-        genericMenu(R.layout.dialog_top_menu, buttons, hiddenButtons, restoreState)
+        genericMenu(R.layout.dialog_top_menu, buttons, hiddenButtons, restoreState) { dialogView ->
+            // Dynamically set compatBtn text to reflect current state
+            dialogView.findViewById<Button>(R.id.compatBtn)?.text =
+                if (isAudioCompatEnabled) "音频兼容: 开" else "音频兼容: 关"
+        }
     }
 
     private fun genericPickerDialog(
@@ -2212,18 +2342,23 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
     override fun event(eventId: Int) {
         if (eventId == MpvEvent.MPV_EVENT_END_FILE) {
+            Log.d(SYNC_TAG, "[mpv-event] END_FILE playbackHasStarted=$playbackHasStarted path=${syncUrlSummary(MPVLib.getPropertyString("path") ?: "")}")
             psc.eof()
             updateMediaSession()
         }
 
-        if (eventId == MpvEvent.MPV_EVENT_SHUTDOWN)
+        if (eventId == MpvEvent.MPV_EVENT_SHUTDOWN) {
+            Log.d(SYNC_TAG, "[mpv-event] SHUTDOWN playbackHasStarted=$playbackHasStarted syncPanelVisible=${binding.syncPanel.visibility == View.VISIBLE}")
             finishWithResult(if (playbackHasStarted) RESULT_OK else RESULT_CANCELED)
+        }
 
         if (eventId == MpvEvent.MPV_EVENT_START_FILE) {
+            startedMediaGeneration = mediaLoadGeneration
             val cmds = onloadCommands.toTypedArray()
             onloadCommands.clear()
             for (c in cmds)
                 MPVLib.command(c)
+            applyOnlineSubtitleIfReady(startedMediaGeneration, "start-file")
             if (this.statsLuaMode > 0 && !playbackHasStarted) {
                 MPVLib.command(arrayOf("script-binding", "stats/display-page-${this.statsLuaMode}-toggle"))
             }
@@ -2233,6 +2368,16 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
 
         if (!activityIsForeground) return
         eventUiHandler.post { eventUi(eventId) }
+    }
+
+    override fun logMessage(prefix: String, level: Int, text: String) {
+        if (level <= MPVLib.MpvLogLevel.MPV_LOG_LEVEL_INFO ||
+            prefix.contains("ffmpeg", ignoreCase = true) ||
+            prefix.contains("stream", ignoreCase = true) ||
+            prefix.contains("demux", ignoreCase = true)
+        ) {
+            Log.d(SYNC_TAG, "[mpv-log][$prefix][$level] ${text.trim()}")
+        }
     }
 
     // Gesture handler
@@ -2390,29 +2535,111 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         }
     }
 
+    private fun resolveSyncUrl(rawUrl: String): String? {
+        val url = rawUrl.trim()
+        if (url.isEmpty()) return null
+        if (!url.startsWith("/")) return url
+
+        val serverUrl = binding.syncServerUrlInput.text.toString().trim()
+        val base = if (serverUrl.endsWith("/")) serverUrl.substring(0, serverUrl.length - 1) else serverUrl
+        return base + url
+    }
+
+    private fun clearOnlineSubtitleState() {
+        onlineSubtitleUrl = null
+        pendingOnlineSubtitleUrl = null
+        pendingOnlineSubtitleTitle = null
+        pendingOnlineSubtitleGeneration = 0
+        appliedOnlineSubtitleUrl = null
+        appliedOnlineSubtitleGeneration = 0
+    }
+
+    private fun queueOnlineSubtitle(url: String, title: String) {
+        val absoluteUrl = resolveSyncUrl(url) ?: return
+        val generation = mediaLoadGeneration
+        onlineSubtitleUrl = absoluteUrl
+        pendingOnlineSubtitleUrl = absoluteUrl
+        pendingOnlineSubtitleTitle = title
+        pendingOnlineSubtitleGeneration = generation
+        Log.d(SYNC_TAG, "[subtitle] queued gen=$generation url=${syncUrlSummary(absoluteUrl)} title=$title")
+        applyOnlineSubtitleIfReady(generation, "bridge")
+    }
+
+    private fun applyOnlineSubtitleIfReady(generation: Int, reason: String) {
+        val subUrl = pendingOnlineSubtitleUrl ?: onlineSubtitleUrl ?: return
+        if (generation != mediaLoadGeneration) {
+            Log.d(SYNC_TAG, "[subtitle] skip stale reason=$reason subtitleGen=$generation mediaGen=$mediaLoadGeneration")
+            return
+        }
+        if (startedMediaGeneration < generation) {
+            Log.d(SYNC_TAG, "[subtitle] wait reason=$reason subtitleGen=$generation startedGen=$startedMediaGeneration")
+            return
+        }
+        if (appliedOnlineSubtitleGeneration == generation && appliedOnlineSubtitleUrl == subUrl) {
+            Log.d(SYNC_TAG, "[subtitle] skip duplicate reason=$reason gen=$generation")
+            return
+        }
+
+        eventUiHandler.postDelayed({
+            val delayedUrl = pendingOnlineSubtitleUrl ?: onlineSubtitleUrl ?: return@postDelayed
+            if (generation != mediaLoadGeneration || startedMediaGeneration < generation) {
+                Log.d(SYNC_TAG, "[subtitle] skip delayed stale reason=$reason subtitleGen=$generation mediaGen=$mediaLoadGeneration startedGen=$startedMediaGeneration")
+                return@postDelayed
+            }
+            if (appliedOnlineSubtitleGeneration == generation && appliedOnlineSubtitleUrl == delayedUrl) {
+                return@postDelayed
+            }
+
+            try {
+                addSubtitleTrack(delayedUrl, "select", reason)
+                appliedOnlineSubtitleUrl = delayedUrl
+                appliedOnlineSubtitleGeneration = generation
+                pendingOnlineSubtitleUrl = null
+                pendingOnlineSubtitleTitle = null
+                Log.d(SYNC_TAG, "[subtitle] sub-add ok reason=$reason gen=$generation url=${syncUrlSummary(delayedUrl)}")
+            } catch (e: Exception) {
+                Log.e(TAG, "online subtitle sub-add failed: ${e.message}", e)
+            }
+        }, 300L)
+    }
+
+    private fun addSubtitleTrack(url: String, flag: String, reason: String) {
+        Log.d(SYNC_TAG, "[subtitle] mpv sub-add reason=$reason flag=$flag url=${syncUrlSummary(url)}")
+        MPVLib.command(arrayOf("sub-add", url, flag))
+    }
+
     private fun loadVideoWithHeaders(url: String, mode: String = "replace", title: String? = null) {
+        mediaLoadGeneration += 1
+        clearOnlineSubtitleState()
         currentLoadedUrl = url
         var userAgent = ""
         var referer = ""
         Log.d(SYNC_TAG, "[loadfile] ${syncUrlSummary(url)} mode=$mode")
         
         var isBaiduPcs = false
+        var isBilibili = false
         if (url.contains("baidupcs.com") || url.contains("pcs.baidu.com")) {
             userAgent = "pan.baidu.com"
             referer = "" // DO NOT send Referer to match working curl behavior
             isBaiduPcs = true
+        } else if (url.contains("bilibili") || url.contains("bilivideo.com") || url.contains("biliapi") || url.contains("upos-") || url.contains("akamaized.net") || url.contains("hdslb.com")) {
+            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            referer = "https://www.bilibili.com/"
+            isBilibili = true
         }
         val uaSet = userAgent.isNotEmpty()
         val refererCleared = referer.isEmpty()
-        Log.d(SYNC_TAG, "[headers] isBaiduPcs=$isBaiduPcs uaSet=$uaSet refererCleared=$refererCleared")
-        
+        Log.d(SYNC_TAG, "[headers] isBaiduPcs=$isBaiduPcs isBilibili=$isBilibili uaSet=$uaSet refererCleared=$refererCleared")
         try {
             val headers = mutableListOf<String>()
             if (userAgent.isNotEmpty()) headers.add("User-Agent: $userAgent")
             if (referer.isNotEmpty()) headers.add("Referer: $referer")
 
+            val headersStr = headers.joinToString(",")
+
+
             MPVLib.setPropertyString("user-agent", userAgent)
-            MPVLib.setPropertyString("http-header-fields", headers.joinToString(","))
+            MPVLib.setPropertyString("http-header-fields", headersStr)
             MPVLib.setPropertyString("force-media-title", title ?: "")
 
             MPVLib.command(arrayOf("loadfile", url, mode))
@@ -2422,17 +2649,209 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     }
 
     inner class AndroidBridge {
+        private var activeDownloadThread: Thread? = null
+        private var isAndroidDownloading = false
+
+        @JavascriptInterface
+        fun getDownloadPath(): String {
+            val sharedPrefs = getDefaultSharedPreferences(applicationContext)
+            return sharedPrefs.getString("download_path", "") ?: ""
+        }
+
+        @JavascriptInterface
+        fun selectDownloadPath(): String {
+            val defaultPath = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)?.absolutePath ?: File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "sync_mpv_downloads").absolutePath
+            var resultPath = ""
+            val latch = java.util.concurrent.CountDownLatch(1)
+            
+            runOnUiThread {
+                val input = android.widget.EditText(this@MPVActivity)
+                val sharedPrefs = getDefaultSharedPreferences(applicationContext)
+                val saved = sharedPrefs.getString("download_path", "")
+                input.setText(if (saved.isNullOrEmpty()) defaultPath else saved)
+                
+                android.app.AlertDialog.Builder(this@MPVActivity)
+                    .setTitle("设置保存路径")
+                    .setMessage("请输入本地保存的绝对路径：")
+                    .setView(input)
+                    .setPositiveButton("确定") { _, _ ->
+                        val path = input.text.toString().trim()
+                        if (path.isNotEmpty()) {
+                            val dir = File(path)
+                            if (!dir.exists()) {
+                                dir.mkdirs()
+                            }
+                            sharedPrefs.edit().putString("download_path", path).apply()
+                            resultPath = path
+                            showToast("保存路径设置成功: $path")
+                            val escapedPath = org.json.JSONObject.quote(path)
+                            binding.syncWebView.evaluateJavascript("javascript:if(document.getElementById('downloadPathInput')) document.getElementById('downloadPathInput').value = $escapedPath;", null)
+                        }
+                        latch.countDown()
+                    }
+                    .setNegativeButton("取消") { _, _ ->
+                        latch.countDown()
+                    }
+                    .setOnCancelListener {
+                        latch.countDown()
+                    }
+                    .show()
+            }
+            try {
+                latch.await(60, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (e: Exception) {}
+            return resultPath
+        }
+
+        @JavascriptInterface
+        fun cancelDownload() {
+            runOnUiThread {
+                activeDownloadThread?.interrupt()
+                isAndroidDownloading = false
+            }
+        }
+
+        @JavascriptInterface
+        fun downloadFile(url: String, fileName: String, headersJson: String) {
+            if (isAndroidDownloading) {
+                sendDownloadStatusToJs(fileName, 0.0, 0, 0, 0.0, "error", "当前已有一个正在进行的下载任务，请先取消或等待其完成。")
+                return
+            }
+            val downloadDir = getDownloadPath()
+            if (downloadDir.isEmpty()) {
+                sendDownloadStatusToJs(fileName, 0.0, 0, 0, 0.0, "error", "下载路径未设置。")
+                return
+            }
+            isAndroidDownloading = true
+            activeDownloadThread = Thread {
+                val partFile = File(downloadDir, "$fileName.part")
+                val finalFile = File(downloadDir, fileName)
+                try {
+                    sendDownloadStatusToJs(fileName, 0.0, 0, 0, 0.0, "start", "开始下载...")
+                    val urlObj = java.net.URL(url)
+                    val conn = urlObj.openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 15000
+                    conn.readTimeout = 20000
+                    conn.instanceFollowRedirects = true
+
+                    if (headersJson.isNotEmpty()) {
+                        try {
+                            val json = org.json.JSONObject(headersJson)
+                            val keys = json.keys()
+                            while (keys.hasNext()) {
+                                val key = keys.next() as String
+                                val value = json.getString(key)
+                                conn.setRequestProperty(key, value)
+                            }
+                        } catch (e: Exception) {
+                            Log.e("AndroidBridge", "Failed to parse headersJson: ${e.message}")
+                        }
+                    }
+
+                    conn.connect()
+                    val responseCode = conn.responseCode
+                    if (responseCode !in 200..299) {
+                        throw Exception("HTTP $responseCode")
+                    }
+
+                    val contentLength = conn.contentLengthLong
+                    val inputStream = conn.inputStream
+                    val outputStream = java.io.FileOutputStream(partFile)
+
+                    val buffer = ByteArray(81920)
+                    var downloadedBytes = 0L
+                    var lastUpdateTime = System.currentTimeMillis()
+                    var bytesSinceLastSpeedCheck = 0L
+                    var currentSpeedMBs = 0.0
+                    var lastSpeedTime = System.currentTimeMillis()
+
+                    var bytesRead: Int
+                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                        if (Thread.currentThread().isInterrupted) {
+                            throw InterruptedException()
+                        }
+                        outputStream.write(buffer, 0, bytesRead)
+                        downloadedBytes += bytesRead
+                        bytesSinceLastSpeedCheck += bytesRead
+
+                        val now = System.currentTimeMillis()
+                        if (now - lastSpeedTime >= 1000) {
+                            currentSpeedMBs = (bytesSinceLastSpeedCheck / 1024.0 / 1024.0) / ((now - lastSpeedTime) / 1000.0)
+                            bytesSinceLastSpeedCheck = 0
+                            lastSpeedTime = now
+                        }
+
+                        if (now - lastUpdateTime >= 2000) {
+                            val percent = if (contentLength > 0) {
+                                Math.min(99.9, (downloadedBytes * 100.0 / contentLength))
+                            } else {
+                                0.0
+                            }
+                            sendDownloadStatusToJs(fileName, percent, downloadedBytes, contentLength, currentSpeedMBs, "progress", "")
+                            lastUpdateTime = now
+                        }
+                    }
+
+                    outputStream.close()
+                    inputStream.close()
+
+                    if (finalFile.exists()) {
+                        finalFile.delete()
+                    }
+                    partFile.renameTo(finalFile)
+                    sendDownloadStatusToJs(fileName, 100.0, downloadedBytes, contentLength, 0.0, "done", finalFile.absolutePath)
+                } catch (e: InterruptedException) {
+                    try { if (partFile.exists()) partFile.delete() } catch(ex: Exception) {}
+                    sendDownloadStatusToJs(fileName, 0.0, 0, 0, 0.0, "error", "下载被取消。")
+                } catch (e: Exception) {
+                    try { if (partFile.exists()) partFile.delete() } catch(ex: Exception) {}
+                    sendDownloadStatusToJs(fileName, 0.0, 0, 0, 0.0, "error", e.message ?: "下载失败")
+                } finally {
+                    isAndroidDownloading = false
+                    activeDownloadThread = null
+                }
+            }
+            activeDownloadThread?.start()
+        }
+
+        private fun sendDownloadStatusToJs(fileName: String, percent: Double, downloaded: Long, total: Long, speed: Double, status: String, message: String) {
+            runOnUiThread {
+                val escapedFile = org.json.JSONObject.quote(fileName)
+                val escapedMsg = org.json.JSONObject.quote(message)
+                val percentStr = String.format(java.util.Locale.US, "%.1f", percent)
+                val speedStr = String.format(java.util.Locale.US, "%.1f", speed)
+                val script = "javascript:window.onDownloadProgress?.($escapedFile, $percentStr, $downloaded, $total, $speedStr, '$status', $escapedMsg);"
+                binding.syncWebView.evaluateJavascript(script, null)
+            }
+        }
+
+        @JavascriptInterface
+        fun onThemeToggle(isLight: Boolean) {
+            runOnUiThread {
+                val prefs = getDefaultSharedPreferences(applicationContext)
+                prefs.edit().putBoolean("night_mode", !isLight).apply()
+                Log.d("AndroidBridge", "onThemeToggle: isLight=$isLight -> night_mode=${!isLight}")
+            }
+        }
+
         @JavascriptInterface
         fun onVideoSrcChanged(url: String, title: String) {
             Log.d(SYNC_TAG, "[web->android] onVideoSrcChanged url=${syncUrlSummary(url)} title=$title")
             runOnUiThread {
                 val serverUrl = binding.syncServerUrlInput.text.toString().trim()
-                val absoluteUrl = if (url.startsWith("/")) {
+                var absoluteUrl = if (url.startsWith("/")) {
                     val base = if (serverUrl.endsWith("/")) serverUrl.substring(0, serverUrl.length - 1) else serverUrl
                     base + url
                 } else {
                     url
                 }
+
+                if (url.startsWith("blob:") && pendingLocalFileUrl != null) {
+                    absoluteUrl = pendingLocalFileUrl!!
+                    pendingLocalFileUrl = null
+                    Log.d(SYNC_TAG, "[web->android] redirected blob url to local absoluteUrl=$absoluteUrl")
+                }
+
                 onlineSubtitleUrl = null
                 loadVideoWithHeaders(absoluteUrl, "replace", title)
             }
@@ -2499,6 +2918,14 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                 player.playbackSpeed = speed
             }
         }
+
+        @JavascriptInterface
+        fun onSubtitleLoaded(url: String, title: String) {
+            Log.d(SYNC_TAG, "[web->android] onSubtitleLoaded url=${syncUrlSummary(url)} title=$title")
+            runOnUiThread {
+                queueOnlineSubtitle(url, title)
+            }
+        }
         
         @JavascriptInterface
         fun requestMpvState() {
@@ -2532,6 +2959,34 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         @JavascriptInterface
         fun onDanmakuReceived(text: String, color: String) {
             // Placeholder
+        }
+
+        @JavascriptInterface
+        fun setAudioCompatibility(enabled: Boolean) {
+            Log.d(SYNC_TAG, "[web->android] setAudioCompatibility enabled=$enabled")
+            runOnUiThread {
+                isAudioCompatEnabled = enabled
+                if (enabled) {
+                    MPVLib.setPropertyString("audio-channels", "stereo")
+                    MPVLib.setPropertyString("ao", "opensles")
+                    showToast("远端已开启音频兼容 (立体声 + OpenSL ES)")
+                } else {
+                    MPVLib.setPropertyString("audio-channels", "stereo")
+                    MPVLib.setPropertyString("ao", "audiotrack,opensles")
+                    showToast("远端已关闭音频兼容 (自动默认)")
+                }
+                // Force audio output and track re-initialization to apply driver switch immediately
+                MPVLib.command(arrayOf("ao-reload"))
+                val currentAid = player.aid
+                if (currentAid != -1) {
+                    player.aid = -1
+                    eventUiHandler.postDelayed({
+                        runOnUiThread {
+                            player.aid = currentAid
+                        }
+                    }, 200)
+                }
+            }
         }
     }
 
@@ -2601,6 +3056,77 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
     private fun getMonkeyPatchJs(): String {
         return """
             (function() {
+                // Intercept and mock video sources globally to prevent sidebar/WebView playback
+                var originalSetAttribute = Element.prototype.setAttribute;
+                Element.prototype.setAttribute = function(name, value) {
+                    if (name === 'src' && value && value !== 'about:blank' && !value.startsWith('data:')) {
+                        if (this.tagName === 'SOURCE') {
+                            this._mockSrc = value;
+                            console.log("SyncTV [source-setAttribute] " + value);
+                            try {
+                                var title = document.title || "Video";
+                                AndroidBridge.onVideoSrcChanged(value, title);
+                            } catch(e) { console.error(e); }
+                            originalSetAttribute.call(this, 'src', 'data:video/mp4;base64,');
+                            return;
+                        } else if (this.tagName === 'VIDEO') {
+                            if (!value.startsWith('blob:')) {
+                                this._mockSrc = value;
+                                console.log("SyncTV [video-setAttribute] " + value);
+                                try {
+                                    var title = document.title || "Video";
+                                    AndroidBridge.onVideoSrcChanged(value, title);
+                                } catch(e) { console.error(e); }
+                                originalSetAttribute.call(this, 'src', 'data:video/mp4;base64,');
+                                return;
+                            }
+                        }
+                    }
+                    originalSetAttribute.call(this, name, value);
+                };
+
+                var originalGetAttribute = Element.prototype.getAttribute;
+                Element.prototype.getAttribute = function(name) {
+                    if (name === 'src') {
+                        if (this.tagName === 'SOURCE' || this.tagName === 'VIDEO') {
+                            if (this._mockSrc) return this._mockSrc;
+                        }
+                    }
+                    return originalGetAttribute.call(this, name);
+                };
+
+                var nativeSourceSrc = Object.getOwnPropertyDescriptor(HTMLSourceElement.prototype, 'src');
+                if (nativeSourceSrc && nativeSourceSrc.set) {
+                    Object.defineProperty(HTMLSourceElement.prototype, 'src', {
+                        get: function() { return this._mockSrc || ""; },
+                        set: function(val) {
+                            if (!val || val === 'about:blank' || val.startsWith('data:')) return;
+                            this._mockSrc = val;
+                            console.log("SyncTV [source-src-set] " + val);
+                            try {
+                                var title = document.title || "Video";
+                                AndroidBridge.onVideoSrcChanged(val, title);
+                            } catch(e) { console.error(e); }
+                            nativeSourceSrc.set.call(this, 'data:video/mp4;base64,');
+                        }
+                    });
+                } else {
+                    try {
+                        Object.defineProperty(HTMLSourceElement.prototype, 'src', {
+                            get: function() { return this._mockSrc || ""; },
+                            set: function(val) {
+                                if (!val || val === 'about:blank' || val.startsWith('data:')) return;
+                                this._mockSrc = val;
+                                console.log("SyncTV [source-src-set-fallback] " + val);
+                                try {
+                                    var title = document.title || "Video";
+                                    AndroidBridge.onVideoSrcChanged(val, title);
+                                } catch(e) { console.error(e); }
+                            }
+                        });
+                    } catch(e) { console.error("HTMLSourceElement override failed", e); }
+                }
+
                 // Periodic style application depending on pathname
                 function applyStyles() {
                     if (window.location.pathname.indexOf('/room/') !== -1) {
@@ -2629,7 +3155,36 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                 // Periodic player mocking check
                 setInterval(function() {
                     var p = document.querySelector('video');
-                    if (!p || p._isMocked) return;
+                    if (!p) return;
+
+                    // Periodic scan to intercept any unpatched sources in DOM
+                    var videoSrc = originalGetAttribute.call(p, 'src');
+                    if (videoSrc && videoSrc !== 'about:blank' && !videoSrc.startsWith('data:') && !videoSrc.startsWith('blob:')) {
+                        p._mockSrc = videoSrc;
+                        console.log("SyncTV [periodic-video-scan] " + videoSrc);
+                        try {
+                            var title = document.title || "Video";
+                            AndroidBridge.onVideoSrcChanged(videoSrc, title);
+                        } catch(e) { console.error(e); }
+                        originalSetAttribute.call(p, 'src', 'data:video/mp4;base64,');
+                    }
+
+                    var sources = p.querySelectorAll('source');
+                    for (var i = 0; i < sources.length; i++) {
+                        var s = sources[i];
+                        var sourceSrc = originalGetAttribute.call(s, 'src');
+                        if (sourceSrc && sourceSrc !== 'about:blank' && !sourceSrc.startsWith('data:')) {
+                            s._mockSrc = sourceSrc;
+                            console.log("SyncTV [periodic-source-scan] " + sourceSrc);
+                            try {
+                                var title = document.title || "Video";
+                                AndroidBridge.onVideoSrcChanged(sourceSrc, title);
+                            } catch(e) { console.error(e); }
+                            originalSetAttribute.call(s, 'src', 'data:video/mp4;base64,');
+                        }
+                    }
+
+                    if (p._isMocked) return;
                     p._isMocked = true;
 
                     p._mockCurrentTime = 0;
@@ -2703,80 +3258,129 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
                         this._syncingFromNative = false;
                     };
 
-                    var nativeSrc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
-                    if (!nativeSrc) {
-                        nativeSrc = Object.getOwnPropertyDescriptor(p.constructor.prototype, 'src');
+                    function safeDefineProperty(obj, prop, desc) {
+                        try {
+                            Object.defineProperty(obj, prop, desc);
+                        } catch(e) {
+                            console.error("Define " + prop + " failed", e);
+                        }
                     }
 
-                    if (nativeSrc && nativeSrc.set) {
-                        Object.defineProperty(p, 'src', {
-                            get: function() { return this._mockSrc || ""; },
-                            set: function(val) {
-                                this._mockSrc = val;
-                                try {
-                                    var title = document.title || "Video";
-                                    AndroidBridge.onVideoSrcChanged(val, title);
-                                } catch(e) { console.error(e); }
-                            }
-                        });
-                        
-                        Object.defineProperty(p, 'currentTime', {
-                            get: function() { return this._mockCurrentTime; },
-                            set: function(val) {
-                                this._mockCurrentTime = val;
-                                if (this._syncingFromNative) return;
-                                try {
-                                    AndroidBridge.onVideoSeek(val, typeof isSyncing !== 'undefined' ? isSyncing : false);
-                                } catch(e) {}
-                            }
-                        });
-
-                        Object.defineProperty(p, 'duration', {
-                            get: function() { return this._mockDuration; },
-                            set: function() {}
-                        });
-
-                        Object.defineProperty(p, 'paused', {
-                            get: function() { return this._mockPaused; },
-                            set: function() {}
-                        });
-
-                        Object.defineProperty(p, 'seeking', {
-                            get: function() { return this.mpvState ? this.mpvState.seeking : false; }
-                        });
-
-                        Object.defineProperty(p, 'playbackRate', {
-                            get: function() { return this._mockPlaybackRate; },
-                            set: function(val) {
-                                this._mockPlaybackRate = val;
-                                this.dispatchEvent(new Event('ratechange'));
-                                if (this._syncingFromNative) return;
-                                try {
-                                    AndroidBridge.onVideoSpeedChange(val, typeof isSyncing !== 'undefined' ? isSyncing : false);
-                                } catch(e) {}
-                            }
-                        });
-
-                        p.play = function() {
-                            this._mockPaused = false;
-                            if (this._syncingFromNative) return Promise.resolve();
-                            AndroidBridge.onVideoPlay(typeof isSyncing !== 'undefined' ? isSyncing : false);
-                            return Promise.resolve();
-                        };
-
-                        p.pause = function() {
-                            this._mockPaused = true;
+                    safeDefineProperty(p, 'src', {
+                        get: function() {
+                            if (this._mockSrc) return this._mockSrc;
+                            var firstSource = this.querySelector('source');
+                            if (firstSource && firstSource._mockSrc) return firstSource._mockSrc;
+                            return "";
+                        },
+                        set: function(val) {
+                            if (!val || val === 'about:blank' || val.startsWith('data:')) return;
+                            this._mockSrc = val;
+                            try {
+                                var title = document.title || "Video";
+                                AndroidBridge.onVideoSrcChanged(val, title);
+                            } catch(e) { console.error(e); }
+                        }
+                    });
+                    
+                    safeDefineProperty(p, 'currentTime', {
+                        get: function() { return this._mockCurrentTime; },
+                        set: function(val) {
+                            this._mockCurrentTime = val;
                             if (this._syncingFromNative) return;
-                            AndroidBridge.onVideoPause(typeof isSyncing !== 'undefined' ? isSyncing : false);
-                        };
+                            try {
+                                AndroidBridge.onVideoSeek(val, typeof isSyncing !== 'undefined' ? isSyncing : false);
+                            } catch(e) {}
+                        }
+                    });
 
-                        p.load = function() {
-                            console.log("Mocked video.load() suppressed.");
-                        };
-                    }
+                    safeDefineProperty(p, 'duration', {
+                        get: function() { return this._mockDuration; },
+                        set: function() {}
+                    });
+
+                    safeDefineProperty(p, 'paused', {
+                        get: function() { return this._mockPaused; },
+                        set: function() {}
+                    });
+
+                    safeDefineProperty(p, 'seeking', {
+                        get: function() { return this.mpvState ? this.mpvState.seeking : false; }
+                    });
+
+                    safeDefineProperty(p, 'playbackRate', {
+                        get: function() { return this._mockPlaybackRate; },
+                        set: function(val) {
+                            this._mockPlaybackRate = val;
+                            this.dispatchEvent(new Event('ratechange'));
+                            if (this._syncingFromNative) return;
+                            try {
+                                AndroidBridge.onVideoSpeedChange(val, typeof isSyncing !== 'undefined' ? isSyncing : false);
+                            } catch(e) {}
+                        }
+                    });
+
+                    p.play = function() {
+                        this._mockPaused = false;
+                        if (this._syncingFromNative) return Promise.resolve();
+                        AndroidBridge.onVideoPlay(typeof isSyncing !== 'undefined' ? isSyncing : false);
+                        return Promise.resolve();
+                    };
+
+                    p.pause = function() {
+                        this._mockPaused = true;
+                        if (this._syncingFromNative) return;
+                        AndroidBridge.onVideoPause(typeof isSyncing !== 'undefined' ? isSyncing : false);
+                    };
+
+                    p.load = function() {
+                        console.log("Mocked video.load() suppressed.");
+                    };
                 }, 500);
+
+                // Intercept WebSocket messages to forward audio-compat to native MPV
+                var _origWsSetter = Object.getOwnPropertyDescriptor(window, 'ws');
+                var _audioCompatPatched = false;
+                setInterval(function() {
+                    if (_audioCompatPatched || !window.ws || !window.ws.onmessage) return;
+                    var origOnMessage = window.ws.onmessage;
+                    window.ws.onmessage = function(e) {
+                        try {
+                            var msg = JSON.parse(e.data);
+                            if (msg.type === 'audio-compat' && typeof msg.enabled === 'boolean') {
+                                console.log('SyncTV [audio-compat] received enabled=' + msg.enabled);
+                                try { AndroidBridge.setAudioCompatibility(msg.enabled); } catch(err) {}
+                            }
+                        } catch(ex) {}
+                        origOnMessage.call(this, e);
+                    };
+                    _audioCompatPatched = true;
+                    console.log('SyncTV [audio-compat] WebSocket onmessage patched');
+                }, 1000);
             })();
         """.trimIndent()
+    }
+
+    private fun syncThemeToWebView() {
+        val prefs = getDefaultSharedPreferences(applicationContext)
+        val nightMode = prefs.getBoolean("night_mode", false)
+        val themeStr = if (nightMode) "dark" else "light"
+        binding.syncWebView.post {
+            binding.syncWebView.evaluateJavascript("""
+                (function() {
+                    localStorage.setItem('theme', '$themeStr');
+                    if ('$themeStr' === 'light') {
+                        document.documentElement.classList.add('light-mode');
+                    } else {
+                        document.documentElement.classList.remove('light-mode');
+                    }
+                    var toggle = document.getElementById('themeToggle');
+                    if (toggle) {
+                        toggle.innerHTML = '$themeStr' === 'light' ? '☀️' : '🌙';
+                    }
+                })();
+            """.trimIndent(), null)
+        }
     }
 
     companion object {
@@ -2796,6 +3400,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, TouchGesturesObse
         private const val RCODE_EXTERNAL_AUDIO = 1000
         private const val RCODE_EXTERNAL_SUB = 1001
         private const val RCODE_LOAD_FILE = 1002
+        private const val RCODE_WEB_FILE_CHOOSER = 1003
         // action of result intent
         private const val RESULT_INTENT = "is.xyz.mpv.MPVActivity.result"
         // stream type used with AudioManager
