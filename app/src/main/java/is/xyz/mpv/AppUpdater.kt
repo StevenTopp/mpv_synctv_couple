@@ -118,7 +118,12 @@ object AppUpdater {
                     } catch (e: Exception) {
                         null
                     }
-                    val currentVersionCode = packageInfo?.versionCode ?: BuildConfig.VERSION_CODE
+                    val currentVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        packageInfo?.longVersionCode?.toInt() ?: BuildConfig.VERSION_CODE
+                    } else {
+                        @Suppress("DEPRECATION")
+                        packageInfo?.versionCode ?: BuildConfig.VERSION_CODE
+                    }
                     Log.d(TAG, "Update check result: server=$serverVersionCode, current=$currentVersionCode, targetAbi=$targetAbi, url=$downloadUrl")
                     
                     val serverBase = if (serverVersionCode >= 8000) {

@@ -2899,13 +2899,14 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, MPVLib.LogObserve
                 if (isRemoteSync) isRemoteSeekSync = true
                 player.timePos = seconds
 
+                val isPostCompleteCorrection = isRemoteSync && activeSeekId.isNullOrEmpty()
                 val url = currentLoadedUrl
                 val isRemote = url != null && (url.startsWith("http://") || url.startsWith("https://"))
-                if (isRemoteSync && isRemote && activeSeekId != null) {
-                    Log.d(SYNC_TAG, "[programmatic-seek] mark=true reason=remote-seek activeSeekId=$activeSeekId")
+                if (isRemote && !isPostCompleteCorrection) {
+                    Log.d(SYNC_TAG, "[buffer-probe-trigger] start buffer probe for seconds=$seconds isRemoteSync=$isRemoteSync activeSeekId=$activeSeekId")
                     runBufferProbe(seconds, bufferProbeGeneration)
-                } else if (isRemoteSync && isRemote) {
-                    Log.d(SYNC_TAG, "[buffer-probe] skipped reason=no-active-seek activeSeekId=$activeSeekId")
+                } else if (isRemote) {
+                    Log.d(SYNC_TAG, "[buffer-probe-skip] skipped remote=$isRemoteSync activeSeekId=$activeSeekId isPostCompleteCorrection=$isPostCompleteCorrection")
                 }
             }
         }
@@ -3007,28 +3008,61 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, MPVLib.LogObserve
                 }
                 Log.d("MPVActivity", "[buffer-probe-play] gen=$gen unpausing MPV to force buffering")
                 player.paused = false
+                
+                // Start dynamic polling ticks after unpausing
+                startBufferProbePolling(targetSeconds, gen, 0)
             }
         }, 150)
+    }
 
+    private fun startBufferProbePolling(targetSeconds: Double, gen: Int, tick: Int) {
+        val maxTicks = 180 // 18 seconds total
+        if (bufferProbeGeneration != gen) {
+            Log.d("MPVActivity", "[buffer-probe-cancelled] Polling loop stopped for gen=$gen (current=$bufferProbeGeneration)")
+            return
+        }
+
+        if (tick >= maxTicks) {
+            Log.d("MPVActivity", "[buffer-probe-timeout] Dynamic buffering timed out after 18s for gen=$gen. Proceeding with best-effort pause.")
+            finishBufferProbe(targetSeconds, gen)
+            return
+        }
+
+        val seeking = mpvSeeking
+        val pausedForCache = mpvPausedForCache
+        val cacheState = mpvCacheBufferingState
+        val hasVideoOut = mpvHasVideoOut
+
+        if (!seeking && !pausedForCache && cacheState >= 100 && hasVideoOut) {
+            Log.d("MPVActivity", "[buffer-probe-success] Buffer target reached at tick $tick (${tick * 100}ms) for gen=$gen. seeking=$seeking, pausedForCache=$pausedForCache, cacheState=$cacheState, hasVideoOut=$hasVideoOut")
+            finishBufferProbe(targetSeconds, gen)
+            return
+        }
+
+        if (tick % 10 == 0) {
+            Log.d("MPVActivity", "[buffer-probe-polling] Gen $gen at tick $tick: seeking=$seeking, pausedForCache=$pausedForCache, cacheState=$cacheState, hasVideoOut=$hasVideoOut")
+        }
+
+        // Post next tick in 100ms
         eventUiHandler.postDelayed({
             runOnUiThread {
-                if (bufferProbeGeneration != gen) {
-                    Log.d("MPVActivity", "[buffer-probe-cancelled] Pause step skipped for gen=$gen (current=$bufferProbeGeneration)")
-                    return@runOnUiThread
-                }
-                Log.d("MPVActivity", "[buffer-probe-pause-seekback] gen=$gen pausing MPV and seeking back")
-                player.paused = true
-                isProgrammaticSeek = true
-                player.timePos = targetSeconds
+                startBufferProbePolling(targetSeconds, gen, tick + 1)
             }
-        }, 450)
+        }, 100)
+    }
 
+    private fun finishBufferProbe(targetSeconds: Double, gen: Int) {
+        if (bufferProbeGeneration != gen) return
+
+        Log.d("MPVActivity", "[buffer-probe-pause-seekback] gen=$gen pausing MPV and seeking back")
+        player.paused = true
+        isProgrammaticSeek = true
+        player.timePos = targetSeconds
+
+        // Wait 250ms for the seek to settle, then restore mute and finish probe
         eventUiHandler.postDelayed({
             runOnUiThread {
-                if (bufferProbeGeneration != gen) {
-                    Log.d("MPVActivity", "[buffer-probe-cancelled] End step skipped for gen=$gen (current=$bufferProbeGeneration)")
-                    return@runOnUiThread
-                }
+                if (bufferProbeGeneration != gen) return@runOnUiThread
                 Log.d("MPVActivity", "[buffer-probe-end] gen=$gen restoring mute=$originalMuteState and finishing probe")
                 MPVLib.setPropertyBoolean("mute", originalMuteState)
                 isBufferProbeActive = false
@@ -3046,7 +3080,7 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, MPVLib.LogObserve
                     pendingProgrammaticSeekFinish = false
                 }
             }
-        }, 650)
+        }, 250)
     }
 
     fun getWebViewUserAgent(): String {

@@ -186,9 +186,19 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                     } catch (e: Exception) {
                         null
                     }
-                    val currentVersionCode = packageInfo?.versionCode ?: BuildConfig.VERSION_CODE
+                    val currentVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        packageInfo?.longVersionCode?.toInt() ?: BuildConfig.VERSION_CODE
+                    } else {
+                        @Suppress("DEPRECATION")
+                        packageInfo?.versionCode ?: BuildConfig.VERSION_CODE
+                    }
                     
-                    val serverVersionCode = info.versionCode
+                    val serverVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        info.longVersionCode.toInt()
+                    } else {
+                        @Suppress("DEPRECATION")
+                        info.versionCode
+                    }
                     val serverBase = if (serverVersionCode >= 8000) {
                         if (serverVersionCode >= 8200) serverVersionCode - 8200
                         else if (serverVersionCode >= 8100) serverVersionCode - 8100
@@ -209,7 +219,7 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
                             AppUpdater.triggerInstall(ctx, apkFile)
                         }
                     } else {
-                        android.util.Log.d("mpv", "Cached APK is obsolete (cached:${info.versionCode} <= current:${currentVersionCode}). Deleting.")
+                        android.util.Log.d("mpv", "Cached APK is obsolete (cached:${serverVersionCode} <= current:${currentVersionCode}). Deleting.")
                         apkFile.delete()
                     }
                 }
