@@ -1,16 +1,28 @@
-# mpv for Android (SyncTV 专属定制版)
+# mpv for Android (SyncTV 专属定制版) - v1.0 正式版 🚀
 
 [![Build Status](https://github.com/mpv-android/mpv-android/actions/workflows/build.yml/badge.svg?branch=master)](https://github.com/mpv-android/mpv-android/actions/workflows/build.yml)
+[![Version](https://img.shields.io/badge/version-v1.0--stable-red.svg)](https://github.com/StevenTopp/mpv-android)
+[![Platform](https://img.shields.io/badge/platform-Android-brightgreen.svg)](https://developer.android.com/)
+[![Engine](https://img.shields.io/badge/player-libmpv-orange.svg)](https://mpv.io/)
 
-本代码仓是基于开源旗舰级安卓视频播放器 [mpv-android](https://github.com/mpv-android/mpv-android) (基于本地高效 `libmpv` 解码库) 深度二次开发制作的专属版本。
+本代码仓是基于开源旗舰级安卓视频播放器 [mpv-android](https://github.com/mpv-android/mpv-android) (基于本地高效 `libmpv` 解码库) 深度二次开发制作的专属客户端版本。
 
-我们针对 `SyncTV Couple / Mine` 实时同步观影系统，在 Android 原生架构上重构并注入了**专属的双向同步控制、倍速控制、自动追赶、弹幕层渲染、防盗链伪装等全新特性**，旨在打破移动端手机浏览器在视频格式解码、高码率播放、弹幕渲染上的多重性能瓶颈。
+针对 `SyncTV Couple / Mine` 实时同步观影系统，我们在 Android 原生架构上重构并注入了**专属的双向同步控制、倍速控制、自动追赶、弹幕层渲染、防盗链伪装等全新特性**，旨在打破移动端手机浏览器在视频格式解码、高码率播放、弹幕渲染上的多重性能瓶颈。
 
 ---
 
-## 🚀 专属定制扩展特性 (新加特性)
+## 🌟 v1.0 核心更新与稳定特性
 
-我们通过修改 Kotlin 核心播放器架构，并在 `app/src/main/java/is/xyz/mpv/sync/` 等模块中设计了一整套高精度通信桥，为您带来以下全新原生体验：
+本版本（v1.0）正式合入了与服务端、Windows 端高度对齐的 **BUG-012 至 BUG-017 协同稳定修复**，大幅度提升了安卓端在各种网络波动下的同步精度与兼容性：
+* **API 28+ 兼容性更新管理 (BUG-015)**：针对 Android 9.0+ 系统中废弃 legacy `versionCode` 返回 0 导致客户端无限触发检测更新及重复安装的死循环问题，重构了 `AppUpdater.kt` 与 `MainScreenFragment.kt`。引入了对 `longVersionCode` 兼容 API 的安全解析和判断，确保了各系统级别下与更新服务器比对行为的稳定和准确。
+* **微调对齐优化与跳过探测 (BUG-016)**：当网页完成寻址下发微调对齐指令（`isRemoteSync = true` 但 `activeSeekId` 已被清空）时，Android 播放器自动识别并置 `isPostCompleteCorrection = true`，**安全越过**缓冲探测逻辑，杜绝了起播瞬间因无谓的 `runBufferProbe` 触发导致的原生播放器被强行拉入暂停的顽疾。
+* **本地寻址缓冲拉流探测 (BUG-013/014)**：统一了本地主动拖拽寻址的缓冲拉流对齐管线，确保本地缓冲就绪后才宣布 Ready，保障了全员观影的高质量实时对齐。
+
+---
+
+## 🚀 专属定制扩展特性
+
+我们通过修改 Kotlin 核心播放器架构，并在 `app/src/main/java/is/xyz/mpv/` 等模块中设计了一整套高精度通信桥，为您带来以下全新原生体验：
 
 ### 1. 🌐 内置网页同步面板 (Webview Sliding Panel)
 * 在播放界面注入了轻量级、可滑动/隐藏的内置 Webview 控制面板。
@@ -37,10 +49,9 @@
 * 在 Native 视频渲染 SurfaceView 之上，注入了一层高性能的纯原生弹幕透明画布 (`DanmakuView.kt`)。网页端接收到的房间弹幕，可直接投射并在安卓原生画布上以极其丝滑、无延迟的 60FPS 帧率进行硬件加速渲染。
 
 ### 7. 🔤 房间在线字幕同步加载 (Synchronized Subtitle Injection)
-* 房间内任何成员上传或选择的同步字幕（如 `.vtt` / `.srt` / `.ass` 字幕），会在本地原生播放器启动时自动抓取，并通过 `libmpv` 的 `sub-add` 指令直接载入原生视频，完美配合 `libass` 实现超高颜值的精美字幕渲染。
+* 房间内任何成员上传或选择的同步字幕（如 `.vtt` / `.srt` / `.ass` 字幕），会在本地原生播放器启动时自动抓取，并通过 `libmpv` 的 `sub-add` 指令直接载入原生视频，完美配合 `libass` 字幕库实现高颜值精美字幕渲染。
 
 ### 8. 🏆 极致的原生解码优势 (libmpv Hardware Decoding)
-* 移动端浏览器往往面临极大的硬解限制（如不支持 HEVC/H.265、高比特率 HDR 画面、DTS 多声道音轨、以及复杂样式的 SSA/ASS 双字幕特效）。
 * 本定制版利用高效的本地 `libmpv` 原生解码核心，能够完美硬解播放高达 4K 10bit、HDR 原生色彩、甚至 Dolby/DTS 音频的超清片源，并始终保持与 Web 端房间的毫秒级时序同步！
 
 ---
@@ -51,5 +62,6 @@
 
 本定制版本代码结构修改位置：
 * **核心控制逻辑与指令桥：** [MPVActivity.kt](app/src/main/java/is/xyz/mpv/MPVActivity.kt)
+* **安卓版本包更新控制器：** [AppUpdater.kt](app/src/main/java/is/xyz/mpv/AppUpdater.kt)
 * **弹幕渲染画布：** [DanmakuView.kt](app/src/main/java/is/xyz/mpv/DanmakuView.kt)
 * **播放界面控制层 XML：** `app/src/main/res/layout/player.xml`
