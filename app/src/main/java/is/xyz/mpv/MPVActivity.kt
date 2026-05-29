@@ -3202,6 +3202,35 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, MPVLib.LogObserve
                     } catch(e) { console.error("HTMLSourceElement override failed", e); }
                 }
 
+                // Intercept <video>.src property setter (catches player.src = url bypass)
+                var nativeVideoSrc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+                if (nativeVideoSrc && nativeVideoSrc.set) {
+                    Object.defineProperty(HTMLMediaElement.prototype, 'src', {
+                        configurable: true,
+                        get: function() {
+                            if (this.tagName === 'VIDEO' && this._mockSrc) return this._mockSrc;
+                            return nativeVideoSrc.get ? nativeVideoSrc.get.call(this) : '';
+                        },
+                        set: function(val) {
+                            if (this.tagName !== 'VIDEO') {
+                                if (nativeVideoSrc.set) nativeVideoSrc.set.call(this, val);
+                                return;
+                            }
+                            if (!val || val === 'about:blank' || val.startsWith('data:') || val.startsWith('blob:')) {
+                                if (nativeVideoSrc.set) nativeVideoSrc.set.call(this, val);
+                                return;
+                            }
+                            this._mockSrc = val;
+                            console.log("SyncTV [video-src-set] " + val);
+                            try {
+                                var title = document.title || "Video";
+                                AndroidBridge.onVideoSrcChanged(val, title);
+                            } catch(e) { console.error(e); }
+                            if (nativeVideoSrc.set) nativeVideoSrc.set.call(this, 'data:video/mp4;base64,');
+                        }
+                    });
+                }
+
                 // Periodic style application depending on pathname
                 function applyStyles() {
                     if (window.location.pathname.indexOf('/room/') !== -1) {
