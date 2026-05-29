@@ -3323,6 +3323,14 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, MPVLib.LogObserve
                             this._mockCurrentTime = val;
                             if (this._syncingFromNative) return;
                             try {
+                                var isSyncingVar = typeof isSyncing !== 'undefined' ? isSyncing : false;
+                                if (!isSyncingVar && typeof startSeekSync === 'function') {
+                                    var playing = !this.paused;
+                                    var speed = typeof roomSpeed !== 'undefined' ? roomSpeed : 1.0;
+                                    startSeekSync(val, playing, speed);
+                                }
+                            } catch(e) { console.error("SyncTV [currentTime-local-broadcast] failed:", e); }
+                            try {
                                 AndroidBridge.onVideoSeek(val, typeof isSyncing !== 'undefined' ? isSyncing : false);
                             } catch(e) {}
                         }
