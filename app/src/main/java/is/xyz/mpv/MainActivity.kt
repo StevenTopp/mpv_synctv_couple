@@ -21,4 +21,13 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             }
         }
     }
+
+    override fun onResume() {
+        super.onResume()
+        val prefs = android.preference.PreferenceManager.getDefaultSharedPreferences(this)
+        val nightMode = prefs.getBoolean("night_mode", false)
+        val color = if (nightMode) 0xFF8F76AD.toInt() else 0xFF6FA4E3.toInt()
+        supportActionBar?.title = "一起看电影吖"
+        supportActionBar?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(color))
+    }
 }

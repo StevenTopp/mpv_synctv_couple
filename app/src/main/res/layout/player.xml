@@ -284,17 +284,6 @@
                 app:tint="@color/tint_normal" />
 
             <ImageButton
-                android:id="@+id/topSyncBtn"
-                style="?buttonBarButtonStyle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:minWidth="40dp"
-                android:minHeight="40dp"
-                android:padding="4dp"
-                app:srcCompat="@drawable/ic_shuffle_24dp"
-                app:tint="@color/tint_normal" />
-
-            <ImageButton
                 android:id="@+id/topMenuBtn"
                 style="?buttonBarButtonStyle"
                 android:layout_width="wrap_content"
@@ -303,6 +292,17 @@
                 android:minHeight="40dp"
                 android:padding="4dp"
                 app:srcCompat="@drawable/ic_settings_black_24dp"
+                app:tint="@color/tint_normal" />
+
+            <ImageButton
+                android:id="@+id/topSyncBtn"
+                style="?buttonBarButtonStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="40dp"
+                android:minHeight="40dp"
+                android:padding="4dp"
+                app:srcCompat="@drawable/ic_menu_24dp"
                 app:tint="@color/tint_normal" />
 
         </LinearLayout>
@@ -323,7 +323,7 @@
 
         <LinearLayout
             android:id="@+id/syncPanel"
-            android:layout_width="340dp"
+            android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:layout_alignParentEnd="true"
             android:background="#e0212121"
@@ -338,7 +338,8 @@
                 android:orientation="horizontal"
                 android:padding="8dp"
                 android:gravity="center_vertical"
-                android:background="#1e2640">
+                android:background="#1e2640"
+                android:visibility="gone">
 
                 <EditText
                     android:id="@+id/syncServerUrlInput"

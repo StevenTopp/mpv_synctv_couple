@@ -124,6 +124,9 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, MPVLib.LogObserve
     private var bufferProbeTarget: Double? = null
     private var originalMuteState = false
 
+    private var touchStartX = 0f
+    private var touchStartY = 0f
+    private var isTouchOutsidePanelStarted = false
 
     private var audioManager: AudioManager? = null
     private var audioFocusRequest: AudioFocusRequestCompat? = null
@@ -1015,6 +1018,35 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, MPVLib.LogObserve
             return super.dispatchTouchEvent(ev)
         }
 
+        if (binding.syncPanel.visibility == View.VISIBLE) {
+            val location = IntArray(2)
+            binding.syncPanel.getLocationOnScreen(location)
+            val panelLeft = location[0]
+            
+            if (ev.action == MotionEvent.ACTION_DOWN) {
+                if (ev.rawX < panelLeft) {
+                    touchStartX = ev.rawX
+                    touchStartY = ev.rawY
+                    isTouchOutsidePanelStarted = true
+                    return true
+                } else {
+                    isTouchOutsidePanelStarted = false
+                }
+            } else if (isTouchOutsidePanelStarted) {
+                if (ev.action == MotionEvent.ACTION_UP) {
+                    val dx = ev.rawX - touchStartX
+                    val dy = ev.rawY - touchStartY
+                    val dist = kotlin.math.sqrt(dx * dx + dy * dy)
+                    isTouchOutsidePanelStarted = false
+                    if (dist < 15f) {
+                        binding.syncPanel.visibility = View.GONE
+                        updateControlsMargins()
+                    }
+                }
+                return true
+            }
+        }
+
         if (super.dispatchTouchEvent(ev)) {
             // reset delay if the event has been handled
             // ideally we'd want to know if the event was delivered to controls, but we can't
@@ -1176,7 +1208,16 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, MPVLib.LogObserve
     private fun updateControlsMargins() {
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val syncPanelVisible = binding.syncPanel.visibility == View.VISIBLE
-        val extraRightMargin = if (syncPanelVisible) Utils.convertDp(this, 340f) else 0
+
+        binding.syncPanel.updateLayoutParams<ViewGroup.LayoutParams> {
+            width = if (isLandscape) {
+                Utils.convertDp(this@MPVActivity, 340f)
+            } else {
+                ViewGroup.LayoutParams.MATCH_PARENT
+            }
+        }
+
+        val extraRightMargin = if (syncPanelVisible && isLandscape) Utils.convertDp(this, 340f) else 0
 
         binding.controls.updateLayoutParams<MarginLayoutParams> {
             bottomMargin = if (!controlsAtBottom) Utils.convertDp(this@MPVActivity, 60f) else 0
@@ -3322,6 +3363,14 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, MPVLib.LogObserve
                         set: function(val) {
                             this._mockCurrentTime = val;
                             if (this._syncingFromNative) return;
+                            try {
+                                var isSyncingVar = typeof isSyncing !== 'undefined' ? isSyncing : false;
+                                if (!isSyncingVar && typeof startSeekSync === 'function') {
+                                    var playing = !this.paused;
+                                    var speed = typeof roomSpeed !== 'undefined' ? roomSpeed : 1.0;
+                                    startSeekSync(val, playing, speed);
+                                }
+                            } catch(e) { console.error("SyncTV [currentTime-local-broadcast] failed:", e); }
                             try {
                                 AndroidBridge.onVideoSeek(val, typeof isSyncing !== 'undefined' ? isSyncing : false);
                             } catch(e) {}

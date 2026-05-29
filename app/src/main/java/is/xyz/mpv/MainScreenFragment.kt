@@ -298,6 +298,11 @@ class MainScreenFragment : Fragment(R.layout.fragment_main_screen) {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
         val nightMode = prefs.getBoolean("night_mode", false)
         
+        val actionBar = (activity as? androidx.appcompat.app.AppCompatActivity)?.supportActionBar
+        actionBar?.title = "一起看电影吖"
+        val barColor = if (nightMode) 0xFF8F76AD.toInt() else 0xFF6FA4E3.toInt()
+        actionBar?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(barColor))
+
         val themeRes = if (nightMode) R.drawable.main_bg_night else R.drawable.main_bg_day
         val cardRes = if (nightMode) R.drawable.card_bg_night else R.drawable.card_bg_day
         
