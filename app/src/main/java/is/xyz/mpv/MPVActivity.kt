@@ -2218,6 +2218,9 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, MPVLib.LogObserve
                 mpvHasVideoOut = value
                 syncPlayerStateToWebView("has-video-out", value)
                 dumpSeekProbeState("vo-configured")
+                if (value) {
+                    updateOrientation()
+                }
             }
             "mute" -> updateAudioUI()
         }
