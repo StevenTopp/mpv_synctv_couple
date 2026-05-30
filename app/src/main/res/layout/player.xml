@@ -332,6 +332,18 @@
             android:clickable="true"
             android:focusable="true">
 
+            <ImageButton
+                android:id="@+id/syncPanelHideBtn"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_gravity="end"
+                android:layout_marginTop="4dp"
+                android:layout_marginEnd="4dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Hide panel"
+                app:srcCompat="@drawable/ic_close_24dp"
+                app:tint="#FFFFFF" />
+
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

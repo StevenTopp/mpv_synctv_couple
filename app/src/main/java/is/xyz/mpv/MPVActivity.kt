@@ -278,6 +278,11 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, MPVLib.LogObserve
                 updateControlsMargins()
             }
 
+            syncPanelHideBtn.setOnClickListener {
+                syncPanel.visibility = View.GONE
+                updateControlsMargins()
+            }
+
             // WebView setup
             val prefs = getDefaultSharedPreferences(applicationContext)
             val defaultServer = prefs.getString("sync_server", "http://www.monsieursteve.top:9990") ?: "http://www.monsieursteve.top:9990"
