@@ -2675,8 +2675,10 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, MPVLib.LogObserve
         val refererCleared = referer.isEmpty()
         Log.d(SYNC_TAG, "[headers] isBaiduPcs=$isBaiduPcs isBilibili=$isBilibili uaSet=$uaSet refererCleared=$refererCleared")
         try {
+            // Only put Referer in http-header-fields; UA is set via mpv's dedicated
+            // "user-agent" property below. Putting UA in both places caused duplicate
+            // User-Agent headers in the HTTP request, which Tencent Cloud CDN rejects.
             val headers = mutableListOf<String>()
-            if (userAgent.isNotEmpty()) headers.add("User-Agent: $userAgent")
             if (referer.isNotEmpty()) headers.add("Referer: $referer")
 
             val headersStr = headers.joinToString(",")
