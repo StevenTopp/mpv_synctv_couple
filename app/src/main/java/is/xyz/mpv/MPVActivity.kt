@@ -2656,36 +2656,29 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, MPVLib.LogObserve
         mediaLoadGeneration += 1
         clearOnlineSubtitleState()
         currentLoadedUrl = url
-        var userAgent = ""
-        var referer = ""
         Log.d(SYNC_TAG, "[loadfile] ${syncUrlSummary(url)} mode=$mode")
-        
-        var isBaiduPcs = false
-        var isBilibili = false
-        if (url.contains("baidupcs.com") || url.contains("pcs.baidu.com")) {
-            userAgent = "pan.baidu.com"
-            referer = "" // DO NOT send Referer to match working curl behavior
-            isBaiduPcs = true
-        } else if (url.contains("bilibili") || url.contains("bilivideo.com") || url.contains("biliapi") || url.contains("upos-") || url.contains("akamaized.net") || url.contains("hdslb.com")) {
-            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            referer = "https://www.bilibili.com/"
-            isBilibili = true
+
+        // Auto-hide syncPanel when a video URL is received from WebView.
+        // This fires at the right time (when video is about to play), unlike
+        // vo-configured which fires too early on surface creation.
+        if (binding.syncPanel.visibility == View.VISIBLE) {
+            Log.d(SYNC_TAG, "[ui] auto-hiding syncPanel on loadVideoWithHeaders")
+            binding.syncPanel.visibility = View.GONE
+            updateControlsMargins()
         }
-        val uaSet = userAgent.isNotEmpty()
-        val refererCleared = referer.isEmpty()
-        Log.d(SYNC_TAG, "[headers] isBaiduPcs=$isBaiduPcs isBilibili=$isBilibili uaSet=$uaSet refererCleared=$refererCleared")
+        
+        val isBaiduPcs = url.contains("baidupcs.com") || url.contains("pcs.baidu.com")
+        Log.d(SYNC_TAG, "[headers] isBaiduPcs=$isBaiduPcs")
         try {
-            // Only put Referer in http-header-fields; UA is set via mpv's dedicated
-            // "user-agent" property below. Putting UA in both places caused duplicate
-            // User-Agent headers in the HTTP request, which Tencent Cloud CDN rejects.
-            val headers = mutableListOf<String>()
-            if (referer.isNotEmpty()) headers.add("Referer: $referer")
-
-            val headersStr = headers.joinToString(",")
-
-
-            MPVLib.setPropertyString("user-agent", userAgent)
-            MPVLib.setPropertyString("http-header-fields", headersStr)
+            // Only Baidu PCS needs custom headers (special UA, no Referer).
+            // For ALL other URLs (Bilibili, HLS, any direct link), do NOT
+            // modify user-agent or http-header-fields — let mpv use its
+            // native defaults. Setting them to empty string would clear
+            // mpv's default UA and break playback on many CDNs/servers.
+            if (isBaiduPcs) {
+                MPVLib.setPropertyString("user-agent", "pan.baidu.com")
+                MPVLib.setPropertyString("http-header-fields", "")
+            }
             MPVLib.setPropertyString("force-media-title", title ?: "")
 
             MPVLib.command(arrayOf("loadfile", url, mode))
