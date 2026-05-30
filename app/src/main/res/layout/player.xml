@@ -333,6 +333,7 @@
             android:focusable="true">
 
             <FrameLayout
+                android:id="@+id/syncPanelHideBar"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:background="#FF000000">

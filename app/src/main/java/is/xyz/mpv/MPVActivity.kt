@@ -1214,6 +1214,10 @@ class MPVActivity : AppCompatActivity(), MPVLib.EventObserver, MPVLib.LogObserve
         val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         val syncPanelVisible = binding.syncPanel.visibility == View.VISIBLE
 
+        // Hide bar (black mask + close button) only needed in portrait fullscreen mode.
+        // In landscape the panel is a 340dp sidebar — no need to cover mpv controls.
+        binding.syncPanelHideBar.visibility = if (isLandscape) View.GONE else View.VISIBLE
+
         binding.syncPanel.updateLayoutParams<ViewGroup.LayoutParams> {
             width = if (isLandscape) {
                 Utils.convertDp(this@MPVActivity, 340f)
